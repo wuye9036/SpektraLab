@@ -1070,3 +1070,8 @@ into `Session.savedGeometry` — one read per frame, shared with `frameStates`.
   log-exposure axis — every parity bar assumes them.
 - Do not remove the `XCTExpectFailure(strict: true)` marker on the histogram
   case except in the commit that fixes the histogram (trap 33).
+
+## 目录结构
+
+* 所有build都放在 _build 目录下。如果是 worktree， 应当在worktree的 _build 目录下。如果是单笔实验、或者临时产生一个build，放在worktree的 `_build/one-shots/<topic>` 目录下。
+* `testdata` 在主workspace下，你可以copy到worktree中，但是不要git中。
