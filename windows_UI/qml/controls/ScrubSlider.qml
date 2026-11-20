@@ -8,12 +8,13 @@ import QtQuick.Layouts
 // The track: press anywhere -- far from the knob it jumps there, near it the
 // drag is relative -- and drag; Ctrl or Alt for x0.25, Shift snaps to
 // `snap`. Double-click returns to `defaultValue`. A tick marks the default
-// when it is not at an end. The value box scrubs, types, takes the wheel and
-// resets too (ValueBox.qml).
+// when it is not at an end. Wheel over the track or the value box to adjust.
+// The box also scrubs, types and resets (ValueBox.qml).
 //
 //   value, from, to       the model's number (bind it; this never writes it)
 //   defaultValue          double-click target and the tick
-//   step                  the box's wheel and scrub quantum
+//   step                  the scrub and wheel increment (wheel increments are
+//                         at least one displayed unit)
 //   snap                  Shift-drag quantum (0: none)
 //   decimals, signed, suffix   the default format: "+0.25", "4.0 EV", "3 %"
 //   format(v), parse(t)   override the display and the typed-text parser
@@ -89,6 +90,7 @@ ParamRow {
     RowLayout {
         anchors.fill: parent
         spacing: Theme.valueGap
+        HoverHandler { onHoveredChanged: if (!hovered) valueBox.finishWheel() }
         Item {
             id: track
             Layout.fillWidth: true
@@ -149,6 +151,7 @@ ParamRow {
                 // gone to the default and the rest of that press is ignored.
                 property bool resetting: false
                 onPressed: function(mouse) {
+                    valueBox.finishWheel()
                     slider.beginGesture()
                     resetting = false
                     pressX = mouse.x
@@ -170,17 +173,22 @@ ParamRow {
                     slider.endGesture()
                 }
                 onCanceled: slider.endGesture()
+                onWheel: function(wheel) { valueBox.turnWheel(wheel) }
                 // Inside the second press's gesture, so the reset is the same
                 // undo step and the release commits it like any drag.
                 onDoubleClicked: { resetting = true; slider.apply(slider.defaultValue) }
             }
         }
         ValueBox {
+            id: valueBox
             Layout.preferredWidth: Theme.valueWidth
             Layout.alignment: Qt.AlignVCenter
             value: slider.shownValue
             from: slider.from; to: slider.to
             step: slider.step
+            readonly property real displayedUnit: Math.pow(10, -slider.decimals)
+            wheelStep: Math.max(displayedUnit, step)
+            fineWheelStep: Math.max(displayedUnit, wheelStep / 10)
             text: slider.format(slider.shownValue)
             parse: slider.parse
             onEditStarted: { slider.pendingValue = slider.value; slider.boxEditing = true; slider.beginGesture() }

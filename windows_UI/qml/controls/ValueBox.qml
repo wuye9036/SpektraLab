@@ -6,7 +6,7 @@ import QtQuick.Controls
 //
 //   drag sideways     scrubs: the full range across ~300 px; Shift is coarse
 //                     (x4), Ctrl or Alt fine (x0.25)
-//   wheel             one `step` per notch; Shift x10, Ctrl x0.1. A burst of
+//   wheel             one wheelStep per notch; Shift x10, Ctrl for fine steps. A burst of
 //                     notches is one edit (finished 500 ms after the last)
 //   click             types a value: Enter or leaving the box commits a
 //                     number in range, Esc cancels; text that is not a number
@@ -28,6 +28,8 @@ Item {
     property real from: 0
     property real to: 1
     property real step: 0.01
+    property real wheelStep: step
+    property real fineWheelStep: wheelStep / 10
     property string text: value.toFixed(2)
     property var parse: null
     readonly property bool editing: editor.active
@@ -40,6 +42,35 @@ Item {
     implicitWidth: Theme.valueWidth; implicitHeight: Theme.controlHeight
 
     function clamp(v) { return Math.max(Math.min(from, to), Math.min(Math.max(from, to), v)) }
+    // The track and the number share partial notches and one undo gesture.
+    function turnWheel(wheel) {
+        var delta = wheel.angleDelta.y
+        wheel.accepted = !editing && wheel.buttons === Qt.NoButton && delta !== 0
+                         && Math.abs(delta) >= Math.abs(wheel.angleDelta.x)
+        if (!wheel.accepted) return
+        wheelIdle.remainder += delta
+        var notches = Math.trunc(wheelIdle.remainder / 120)
+        wheelIdle.remainder -= notches * 120
+        wheelIdle.restart()
+        if (notches === 0) return
+        var increment = wheel.modifiers & Qt.ShiftModifier ? wheelStep * 10
+                      : wheel.modifiers & Qt.ControlModifier ? fineWheelStep : wheelStep
+        var next = clamp(value + notches * increment)
+        if (next === value) return
+        if (!wheelIdle.editing) {
+            wheelIdle.editing = true
+            editStarted()
+        }
+        edited(next)
+    }
+    function finishWheel() {
+        wheelIdle.stop()
+        wheelIdle.remainder = 0
+        if (wheelIdle.editing) {
+            wheelIdle.editing = false
+            editFinished()
+        }
+    }
     function parseText(t) {
         if (typeof box.parse === "function") return box.parse(t)
         var m = String(t).replace(",", ".").match(/[-+]?\d*\.?\d+(e[-+]?\d+)?/i)
@@ -116,7 +147,7 @@ Item {
         property real pressX: 0
         property real startValue: 0
         property bool scrubbing: false
-        onPressed: function(mouse) { pressX = mouse.x; startValue = box.value; scrubbing = false }
+        onPressed: function(mouse) { box.finishWheel(); pressX = mouse.x; startValue = box.value; scrubbing = false }
         onPositionChanged: function(mouse) {
             var dx = mouse.x - pressX
             if (!scrubbing) {
@@ -136,17 +167,16 @@ Item {
         }
         onCanceled: if (scrubbing) { scrubbing = false; box.editFinished() }
         onDoubleClicked: { typingTimer.stop(); box.resetRequested() }
-        onWheel: function(wheel) {
-            var notches = wheel.angleDelta.y / 120
-            if (notches === 0) return
-            var gain = (wheel.modifiers & Qt.ShiftModifier) ? 10 : (wheel.modifiers & Qt.ControlModifier) ? 0.1 : 1
-            if (!wheelIdle.running) box.editStarted()
-            wheelIdle.restart()
-            box.edited(box.clamp(box.value + notches * box.step * gain))
-        }
+        onWheel: function(wheel) { box.turnWheel(wheel) }
     }
     // A click becomes typing only once it is clearly not the first half of a
     // double-click, which resets instead.
     Timer { id: typingTimer; interval: Qt.styleHints.mouseDoubleClickInterval; onTriggered: box.beginTyping() }
-    Timer { id: wheelIdle; interval: 500; onTriggered: box.editFinished() }
+    Timer {
+        id: wheelIdle
+        property int remainder: 0
+        property bool editing: false
+        interval: 500
+        onTriggered: box.finishWheel()
+    }
 }
