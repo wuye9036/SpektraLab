@@ -440,6 +440,22 @@ public:
         return upload(data, count * sizeof(uint32_t), error);
     }
 
+    BufferRef cache_negative(const BufferRef& source, size_t bytes, std::string& error) override {
+        bool adopted = false;
+        {
+            std::lock_guard<std::mutex> lock(buffers_mutex_);
+            auto* b = source.get();
+            if (b && b->bytes == bytes && b->refs == 1) {
+                // A referenced plane is already excluded from reuse. Moving
+                // it out of the pool makes the final release free it directly.
+                b->persistent = true;
+                adopted = true;
+            }
+        }
+        if (adopted) return source;
+        return Gpu::cache_negative(source, bytes, error);
+    }
+
     BufferRef alloc_persistent(size_t bytes, std::string& error) override {
         return allocate(bytes, true, error);
     }
@@ -455,12 +471,17 @@ public:
         }
         return upload_persistent(data, count * sizeof(uint32_t), error);
     }
-    // File-backed host pages are a Metal-specific optimisation. This first
-    // Vulkan path preserves ownership with ordinary persistent buffers.
     BufferRef alloc_file_backed(size_t bytes, std::string& error) override {
         return alloc_persistent(bytes, error);
     }
     BufferRef upload_file_backed(const void* data, size_t bytes, std::string& error) override {
+        if (data && bytes && bytes % 4 == 0) {
+            if (auto source = host_plane(bytes)) {
+                std::memcpy(source.get()->mapped, data, bytes);
+                if (!mapped_range(*source.get(), bytes, true, error)) return {};
+                return source;
+            }
+        }
         return upload_persistent(data, bytes, error);
     }
     BufferRef borrow(void*, size_t, std::string& error) override {
@@ -508,6 +529,14 @@ public:
         if (!bytes) return true;
         std::lock_guard<std::mutex> lock(dispatch_mutex_);
         const auto start = diagnostic_start();
+        if (src->mapped) {
+            if (!submit_sync([&](VkCommandBuffer command) {
+                    device_barrier(command, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+                }, "Vulkan mapped readback", error) ||
+                !mapped_range(*src, src_offset + bytes, false, error)) return false;
+            std::memcpy(dst, static_cast<const char*>(src->mapped) + src_offset, bytes);
+            return true;
+        }
         if (!ensure_staging(read_staging_, bytes, true, error)) return false;
         if (!submit_sync([&](VkCommandBuffer command) {
                 device_barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -774,7 +803,7 @@ private:
         if (staging.handle && staging.bytes >= bytes) return true;
         Buffer replacement;
         replacement.bytes = bytes;
-        if (!create_buffer(replacement, error, true, readback)) return false;
+        if (!create_buffer(replacement, error, readback ? MemoryUse::readback : MemoryUse::upload)) return false;
         destroy_buffer(&staging);
         staging = replacement;
         return true;
@@ -853,7 +882,18 @@ private:
         return out;
     }
 
-    BufferRef allocate(size_t bytes, bool persistent, std::string& error) {
+    enum class MemoryUse { compute, upload, readback, hostPlane };
+
+    // Long-lived, infrequently accessed planes can use system RAM directly
+    // on a discrete card. Keep the compute intermediates local and fall back
+    // to the ordinary allocation if this device cannot supply host storage.
+    BufferRef host_plane(size_t bytes) {
+        if (properties_.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) return {};
+        std::string why;
+        return allocate(bytes, true, why, MemoryUse::hostPlane);
+    }
+
+    BufferRef allocate(size_t bytes, bool persistent, std::string& error, MemoryUse use = MemoryUse::compute) {
         if (bytes == 0 || bytes > std::numeric_limits<VkDeviceSize>::max()) {
             error = "invalid Vulkan buffer size";
             return {};
@@ -883,7 +923,7 @@ private:
         auto b = std::make_unique<Buffer>();
         b->bytes = bytes;
         b->persistent = persistent;
-        if (!create_buffer(*b, error)) return {};
+        if (!create_buffer(*b, error, use)) return {};
         Buffer* raw = b.release();
         buffers_.push_back(raw);
         if (persistent) ++audit_.persistent_allocations;
@@ -898,7 +938,10 @@ private:
         frame_high_water_ = std::max(frame_high_water_, live);
     }
 
-    bool create_buffer(Buffer& b, std::string& error, bool staging = false, bool readback = false) {
+    bool create_buffer(Buffer& b, std::string& error, MemoryUse use) {
+        const bool readback = use == MemoryUse::readback;
+        const bool staging = use == MemoryUse::upload || readback;
+        const bool mapped = use != MemoryUse::compute;
         VkBufferCreateInfo create{};
         create.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         create.size = VkDeviceSize(b.bytes);
@@ -914,13 +957,16 @@ private:
         int best_score = -1;
         for (uint32_t i = 0; i < memory_properties_.memoryTypeCount; ++i) {
             const auto flags = memory_properties_.memoryTypes[i].propertyFlags;
-            const auto required = staging ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+            const auto required = mapped ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
             if (!(requirements.memoryTypeBits & (1u << i)) || !(flags & required)) continue;
+            if (use == MemoryUse::hostPlane &&
+                (memory_properties_.memoryHeaps[memory_properties_.memoryTypes[i].heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT))
+                continue;
             // Compute planes stay on the device. Staging is chosen separately:
             // CPU readback needs cached host memory, not a CPU mapping of VRAM.
             int score = 0;
-            if (staging) {
-                if (readback && (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) score += 8;
+            if (mapped) {
+                if ((readback || use == MemoryUse::hostPlane) && (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) score += 8;
                 if (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) score += 4;
                 if (!(flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) score += 2;
             } else if (!(flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
@@ -945,7 +991,7 @@ private:
         b.allocation_bytes = requirements.size;
         result = vkAllocateMemory(device_, &allocate_info, nullptr, &b.memory);
         if (result == VK_SUCCESS) result = vkBindBufferMemory(device_, b.handle, b.memory, 0);
-        if (result == VK_SUCCESS && staging)
+        if (result == VK_SUCCESS && mapped)
             result = vkMapMemory(device_, b.memory, 0, VK_WHOLE_SIZE, 0, &b.mapped);
         if (result != VK_SUCCESS) {
             error = vk_error("Vulkan buffer memory", result);
@@ -956,7 +1002,7 @@ private:
             std::fprintf(stderr,
                 "{\"vulkan_allocation\":\"%s\",\"bytes\":%zu,\"allocation_bytes\":%llu,"
                 "\"memory_type\":%u,\"memory_flags\":%u,\"heap\":%u}\n",
-                staging ? (readback ? "read_staging" : "upload_staging") : "compute",
+                staging ? (readback ? "read_staging" : "upload_staging") : use == MemoryUse::hostPlane ? "host_plane" : "compute",
                 b.bytes, static_cast<unsigned long long>(b.allocation_bytes), b.memory_type,
                 uint32_t(b.memory_flags), memory_properties_.memoryTypes[memory_index].heapIndex);
         }
@@ -1104,8 +1150,12 @@ bool VulkanGpu::write_d3d11_display(Buffer* rgb, uint32_t width, uint32_t height
         error = "Vulkan cannot import this shared FP16 storage image"; return false;
     }
 
-    auto exact = alloc_persistent(retained ? size_t(width)*height*8 : sizeof(uint32_t), error);
+    const size_t code_bytes = retained ? size_t(width)*height*8 : sizeof(uint32_t);
+    auto exact = alloc_persistent(code_bytes, error);
     if (!exact) return false;
+    // Emit codes at GPU bandwidth. A single contiguous transfer can then put
+    // the retained pixels in host RAM without slowing every shader workgroup.
+    auto saved = retained ? host_plane(code_bytes) : BufferRef{};
     std::lock_guard lock(dispatch_mutex_);
     struct Imported {
         VkDevice device;
@@ -1216,6 +1266,12 @@ bool VulkanGpu::write_d3d11_display(Buffer* rgb, uint32_t width, uint32_t height
         vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
         vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->layout, 0, 1, &set, 0, nullptr);
         vkCmdDispatch(command, (width + 15) / 16, (height + 15) / 16, 1);
+        if (saved) {
+            device_barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+            VkBufferCopy region{0, 0, VkDeviceSize(code_bytes)};
+            vkCmdCopyBuffer(command, exact.get()->handle, saved.get()->handle, 1, &region);
+            transfer_written(command);
+        }
         b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
         b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         b.dstAccessMask = 0;
@@ -1224,7 +1280,7 @@ bool VulkanGpu::write_d3d11_display(Buffer* rgb, uint32_t width, uint32_t height
         vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                              0, 0, nullptr, 0, nullptr, 1, &b);
     }, "publish D3D11 display texture", error, &keys);
-    if (done && retained) *retained = std::move(exact);
+    if (done && retained) *retained = saved ? std::move(saved) : std::move(exact);
     return done;
 }
 #endif

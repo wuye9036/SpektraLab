@@ -32,7 +32,7 @@ bool check_ranges(Gpu* gpu, std::string& error) {
     const size_t src_bytes = input.size() * sizeof(uint32_t);
     const size_t dst_bytes = expected.size() * sizeof(uint32_t);
     auto src = gpu->upload_persistent(host_input.data(), src_bytes, error);
-    auto dst = gpu->upload_persistent(expected.data(), dst_bytes, error);
+    auto dst = gpu->upload_file_backed(expected.data(), dst_bytes, error);
     if (!src || !dst) return false;
     std::fill(host_input.begin(), host_input.end(), sentinel);
     if (!read_test_buffer(gpu, src, got, error) ||
@@ -172,9 +172,22 @@ bool check_pool_lifetimes(Gpu* gpu, std::string& error) {
         !require(got == expected, "retained buffer changed during reuse or trim", error) ||
         !read_test_buffer(gpu, persistent, got, error) ||
         !require(got == expected, "trim changed a persistent buffer", error)) return false;
+    // An exact-size, exclusively held negative can stay in its original plane.
+    {
+        const BufferRef alias = retained;
+        auto independent = gpu->cache_negative(alias, bytes, error);
+        if (!independent || !require(independent.get() != alias.get(),
+                                    "cached a shared, potentially mutable input by reference", error)) return false;
+    }
+    auto negative = gpu->cache_negative(retained, bytes, error);
+    if (!negative || !require(negative.get() == retained.get(),
+                              "caching the finished negative allocated a second plane", error)) return false;
     retained.reset();
-    if (!require(gpu->trim_pool(0) > 0 && gpu->pool_stats().total_bytes == 0,
-                 "final release and trim failed", error)) return false;
+    gpu->trim_pool(0);
+    if (!require(gpu->pool_stats().total_bytes == 0, "negative still in the transient pool", error) ||
+        !read_test_buffer(gpu, negative, got, error) ||
+        !require(got == expected, "cached negative changed after trim", error)) return false;
+    negative.reset();
     const auto persistent_before = gpu->pool_stats();
     persistent.reset();
     const auto final = gpu->pool_stats();

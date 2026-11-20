@@ -83,6 +83,9 @@ constexpr Tier kTiers[] = {{"live", 1600}, {"preview", 3400}, {"full", 0}};
 // constant, so a tier change cannot move auto exposure; when the live tier is
 // the same size its image is reused.
 constexpr uint32_t kMeterLongEdge = 1600;
+#ifdef _WIN32
+constexpr size_t kPreviewScratchBytes = 64u * 1024u * 1024u;
+#endif
 // The wire fields upstream of the auto-exposure node: the only ones that can
 // change what it meters, so the only ones that re-meter. The film, exposure
 // compensation and the method itself leave the cached meter valid.
@@ -1106,10 +1109,7 @@ bool negative_for(spk_session* session, const Tier& tier, Progress* progress, Im
     state.applied_ev = session->pipeline->last_auto_exposure_ev();
     session->pipeline->overscan_frame(state.overscan_frame_w, state.overscan_frame_h);
     if (progress) progress->auto_exposure_ev = state.applied_ev;
-    // The negative is what every subsequent slider drag reprints from, so it
-    // has to outlive the frame arena. Copying it here is also what makes a
-    // reprint grain-consistent for free: the realisation is baked in and is
-    // never redrawn.
+    // Every reprint reuses this negative, including its grain realisation.
     gpu::Gpu* gpu = session->engine->gpu;
     if (!gpu->flush(error)) return false;
     Image kept;
@@ -1117,9 +1117,8 @@ bool negative_for(spk_session* session, const Tier& tier, Progress* progress, Im
     // The cached negative is the other holding RFC-020 §4.7 names: every
     // reprint reads it, it lives as long as the session, and at the full
     // tier it is the second 1.22 GB plane.
-    kept.buf = gpu->alloc_file_backed(negative.bytes(), error);
-    if (!kept.buf || !gpu->copy(kept.buf.get(), 0, negative.buf.get(), 0,
-                                negative.bytes(), error)) return false;
+    kept.buf = gpu->cache_negative(negative.buf, negative.bytes(), error);
+    if (!kept.buf) return false;
     state.negative = kept;
     state.has_negative = true;
     out = kept;
@@ -1236,8 +1235,7 @@ spk_status render_tier(spk_session* session, const char* tier_name, bool use_rep
         // allocating the shared canvas texture and its exact export codes.
         // Keep a small working set between interactive preview samples. The
         // full-resolution publication gives it back along with its own scratch.
-        constexpr size_t previewScratch = 64u * 1024u * 1024u;
-        gpu->trim_pool(tier->long_edge ? std::max(rgb.bytes(), previewScratch) : rgb.bytes());
+        gpu->trim_pool(tier->long_edge ? std::max(rgb.bytes(), kPreviewScratchBytes) : rgb.bytes());
         gpu::BufferRef exact;
         display->texture = gpu::make_d3d11_display(*gpu, rgb.buf.get(), rgb.w, rgb.h, *display, retainExact ? &exact : nullptr, error);
         if (display->texture) {
@@ -2124,6 +2122,11 @@ spk_status spk_scene_latitude(spk_session* session, const char* request_json, ch
         }
     }
     gpu->end_frame();
+#ifdef _WIN32
+    // The editor measures the scene after presenting the frame. Downsampling
+    // for the meter can leave two full-size prefilter planes idle at this point.
+    gpu->trim_pool(kPreviewScratchBytes);
+#endif
     if (!ok) { g_error = error; return SPK_ERR_GPU; }
     if (cache.scene.samples == 0) { g_error = "scene latitude: the frame has no positive pixels"; return SPK_ERR_USER; }
 

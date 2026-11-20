@@ -1927,7 +1927,8 @@ bool Pipeline::film_log_and_curves(Chain& in, Chain& out, std::string& error) {
 bool Pipeline::film_couplers(Chain& in, Chain& out, std::string& error) {
     Image next;
     SPK_NODE(node_dir_couplers(in.cur, in.log_e_film, next, error));
-    out = in;
+    // The couplers are the last reader of log exposure. Leave that plane
+    // available for the grain pass and its blurs.
     out.cur = next;
     return true;
 }

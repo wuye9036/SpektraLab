@@ -288,6 +288,14 @@ public:
     virtual BufferRef alloc_file_backed(size_t bytes, std::string& error) = 0;
     virtual BufferRef upload_file_backed(const void* data, size_t bytes, std::string& error) = 0;
 
+    // Keep a completed, flushed negative beyond this frame. Metal backs the
+    // cache with a file; a backend with compatible storage can adopt the plane.
+    virtual BufferRef cache_negative(const BufferRef& source, size_t bytes, std::string& error) {
+        auto kept = alloc_file_backed(bytes, error);
+        if (!kept || !copy(kept.get(), 0, source.get(), 0, bytes, error)) return {};
+        return kept;
+    }
+
     // A caller's `id<MTLBuffer>`, wrapped without a copy. Retained while a
     // handle exists and released -- never pooled -- when the last one drops,
     // which is the persistent lifetime above with somebody else's memory in
