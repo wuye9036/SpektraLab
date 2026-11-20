@@ -80,11 +80,12 @@ void PreviewController::exportWithRecipe(const QVariantMap& json) {
                     const auto current=host.current();
                     if(!current||current->source!=source||current->decode_mode!=item.mode||
                        !sameRender(current->settings,item.settings)||!sameFraming(current))
-                        host.open_raw(source,item.mode,item.settings,cut);
+                        host.open_raw(source,item.mode,item.settings,cut,desktop::Tier::full,desktop::FrameUse::pixels);
                     frame=host.render_digital_intermediate();
-                } else frame=shown?fullFrame(host,held):host.open_raw(source,item.mode,item.settings,cut);
+                } else frame=shown?fullFrame(host,held):host.open_raw(source,item.mode,item.settings,cut,desktop::Tier::full,desktop::FrameUse::pixels);
                 if(cancel->load())break;
                 exporting::Job job;
+                job.previewLongEdge=previewImageEdge();
                 job.recipe=recipe;job.source=item.url.toLocalFile();job.resources=resources;
                 job.geometry=frame->cut?desktop::output::Geometry{}:item.geometry;
                 job.name.originalName=QFileInfo(job.source).completeBaseName();
@@ -145,7 +146,7 @@ void PreviewController::requestExportProof(const QVariantMap& json) {
     const auto gen=++proof_generation_;
     // The proof is the file: graded as the export grades (the navigator is
     // the cropped frame, so each pixel is graded at its source position).
-    const auto grade=desktop::postdev::gradeFor(canvasGrade(),navigator.colorSpace());
+    const auto grade=desktop::postdev::gradeFor(canvasGrade(),navigator.colorSpace(),full_image_,prepared_guide_);
     const auto map=desktop::postdev::shownSourceMap(frame,geometry_);
     Job job=[this,gen,recipe,frame,navigator,grade,map](desktop::PreviewHost& host){
         Reply r;r.generation=gen;r.operation="proof";

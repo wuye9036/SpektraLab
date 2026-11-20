@@ -1,4 +1,11 @@
 #include "PostDev.hpp"
+#ifdef Q_OS_WIN
+#include "PostDevGpu.hpp"
+#endif
+#include "../../engine/src/core/tone_guide.hpp"
+#include <QCache>
+#include <QtGui/qrgbafloat.h>
+#include <mutex>
 #include <QColorSpace>
 #include <QImage>
 #include <QJsonArray>
@@ -57,6 +64,158 @@ void forRows(int height, int threads, const RowFn& row) {
     for (int i = 1; i < workers; ++i) pool.emplace_back(work);
     work();
     for (auto& t : pool) t.join();
+}
+
+using Rgb = std::array<float, 3>;
+
+float decodeTone(float v, ToneSpace space) {
+    v = positive(v);
+    if (space == ToneSpace::ProPhotoGamma18) return std::pow(v, 1.8f);
+    if (space == ToneSpace::ProPhoto) return v < 1.f / 32 ? v / 16 : std::pow(v, 1.8f);
+    return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f);
+}
+float encodeTone(float v, ToneSpace space) {
+    if (space == ToneSpace::ProPhotoGamma18) return std::pow(v, 1.f / 1.8f);
+    if (space == ToneSpace::ProPhoto) return v < 1.f / 512 ? 16 * v : std::pow(v, 1.f / 1.8f);
+    return v <= 0.0031308f ? 12.92f * v : 1.055f * std::pow(v, 1.f / 2.4f) - 0.055f;
+}
+Rgb linearRgb(Rgb c, ToneSpace space) {
+    for (auto& v : c)
+        v = decodeTone(v, space);
+    return c;
+}
+float luminance(const Rgb& linear, ToneSpace space) {
+    if (space == ToneSpace::DisplayP3) return .2289746f * linear[0] + .6917385f * linear[1] + .0792869f * linear[2];
+    return (space == ToneSpace::ProPhoto || space == ToneSpace::ProPhotoGamma18)
+               ? .2880402f * linear[0] + .7118741f * linear[1] + .0000857f * linear[2]
+               : luma(linear);
+}
+float toneStops(float y) { return std::clamp(std::log2(std::max(y, 1e-12f) / .184f), -20.f, 20.f); }
+
+float lightness(float y) { return y <= 216.f / 24389 ? 9.032963f * y : 1.16f * std::cbrt(y) - .16f; }
+// Near saturated ProPhoto yellow, Y is within 0.0001 of white. Compute
+// the remaining headroom directly so rounding does not change its hue.
+float contrastY(float y, float whiteDistance, float k, float& headroom) {
+    if (whiteDistance < 0) {
+        headroom = whiteDistance / k;
+        return 1 - headroom;
+    }
+    static const float pivot = lightness(.18f);
+    auto bend = [k](float t) { return t / (k + (1 - k) * t); };
+    if (y > .18f) {
+        const float root = std::cbrt(y);
+        const float distanceL = 1.16f * whiteDistance / (1 + root + root * root);
+        const float d = (1 - pivot) * bend(distanceL / (1 - pivot)) / 1.16f;
+        headroom = d * (3 - 3 * d + d * d);
+        return 1 - headroom;
+    }
+    const float l = pivot * bend(lightness(y) / pivot);
+    const float t = (l + .16f) / 1.16f;
+    const float target = l <= .08f ? l / 9.032963f : t * t * t;
+    headroom = 1 - target;
+    return target;
+}
+
+float pinnedSlope(float l, float low, float high, float k) {
+    if (l <= low || l >= high) return 1;
+    // Express distance from the black (or white) end in units of the
+    // distance to middle grey. Bend only the interval [a,b] within that half.
+    const float pivot = .4949610761f;
+    const bool dark = l < pivot;
+    const float x = dark ? l / pivot : (1 - l) / (1 - pivot);
+    const float a = dark ? low / pivot : (1 - high) / (1 - pivot);
+    const float b = dark ? std::min(high / pivot, 1.f) : std::min((1 - low) / (1 - pivot), 1.f);
+    if (x <= a || x >= b) return 1;
+    const float t = (x - a) / (b - a);
+    const float den = k + (1 - k) * t;
+    // Equivalent slope for the original bend, evaluated without subtracting
+    // two nearly equal output lightnesses near the pivot.
+    return 1 + (k - 1) * ((x - a) / (a * den + (x - a))) * ((b - x) / (1 - x)) / (b - a);
+}
+
+Rgb bendPrint(const Rgb& lin, ToneSpace space, float k) {
+    Rgb c;
+    const float y = luminance(lin, space);
+    const float peak = *std::max_element(lin.begin(), lin.end());
+    auto distance = [&](float v) { return luminance({v - lin[0], v - lin[1], v - lin[2]}, space); };
+    float headroom;
+    const float target = contrastY(y, distance(1), k, headroom);
+    const float gain = target / std::max(y, 1e-12f);
+    const float spread = distance(peak) * gain;
+    // Preserve headroom introduced by exposure or white balance. An
+    // already over-white channel must not force its neighbours to white.
+    const float available = std::max(0.f, headroom + std::max(0.f, peak - 1));
+    const float chroma = spread > available ? available / spread : 1.f;
+    for (int i = 0; i < 3; ++i)
+        c[i] = encodeTone(lin[i] * gain * chroma + target * (1 - chroma), space);
+    return c;
+}
+
+template <class Sample> QImage makeGuide(int width, int height, ToneSpace space, Sample sample) {
+    const int edge = std::max(width, height);
+    const double scale = std::min(1., double(tone_guide::gridLimit) / edge);
+    const int gw = std::max(1, int(std::lround(width * scale)));
+    const int gh = std::max(1, int(std::lround(height * scale)));
+    std::vector<double> cells(size_t(gw) * gh);
+    // CPU reference for float-buffer callers; the Windows image path uses compute.
+    std::vector<std::array<uint32_t, 4096>> bins(gh);
+    forRows(gh, 0, [&](int cy) {
+        const int y0 = int(qint64(cy) * height / gh), y1 = int(qint64(cy + 1) * height / gh);
+        for (int cx = 0; cx < gw; ++cx) {
+            const int x0 = int(qint64(cx) * width / gw), x1 = int(qint64(cx + 1) * width / gw);
+            double sum = 0;
+            for (int y = y0; y < y1; ++y)
+                for (int x = x0; x < x1; ++x)
+                {
+                    const float Y = luminance(linearRgb(sample(x, y), space), space);
+                    sum += toneStops(Y);
+                    ++bins[cy][int(saturate(lightness(Y)) * 4095 + .5f)];
+                }
+            cells[size_t(cy) * gw + cx] = sum / ((x1 - x0) * (y1 - y0));
+        }
+    });
+    const uint64_t count = uint64_t(width) * height;
+    const uint64_t trim = (count - 1) / 1000;
+    uint64_t cumulative = 0;
+    float low = 0, high = 1;
+    for (int i = 0; i < 4096; ++i) {
+        for (const auto& row : bins) cumulative += row[i];
+        if (cumulative <= trim) low = float(i + 1) / 4095;
+        if (cumulative >= count - trim) { high = float(i) / 4095; break; }
+    }
+    // Include the complete bins containing the selected ranks.
+    low = std::min(1.f, low + .5f / 4095);
+    high = std::max(0.f, high - .5f / 4095);
+    const auto ab = tone_guide::coefficients(cells, gw, gh);
+    QImage grid(gw, gh, QImage::Format_RGBA32FPx4);
+    if (grid.isNull()) throw std::bad_alloc();
+    for (int y = 0; y < gh; ++y) {
+        auto* row = reinterpret_cast<float*>(grid.scanLine(y));
+        for (int x = 0; x < gw; ++x) {
+            const size_t i = 2 * (size_t(y) * gw + x);
+            row[4 * x] = ab[i];
+            row[4 * x + 1] = ab[i + 1];
+            row[4 * x + 2] = low;
+            row[4 * x + 3] = high;
+        }
+    }
+    return grid;
+}
+
+std::array<float, 4> guideAt(const QImage& grid, float u, float v) {
+    if (grid.isNull()) return {1, 0, 0, 1};
+    const float x = std::clamp(u * grid.width() - .5f, 0.f, float(grid.width() - 1));
+    const float y = std::clamp(v * grid.height() - .5f, 0.f, float(grid.height() - 1));
+    const int x0 = int(x), x1 = std::min(x0 + 1, grid.width() - 1);
+    auto row = [&](int iy, int ch) {
+        const auto* p = reinterpret_cast<const float*>(grid.constScanLine(iy));
+        return std::lerp(p[4 * x0 + ch], p[4 * x1 + ch], x - x0);
+    };
+    const auto* first = reinterpret_cast<const float*>(grid.constBits());
+    std::array<float, 4> ab{0, 0, first[2], first[3]};
+    for (int c = 0; c < 2; ++c)
+        ab[c] = std::lerp(row(int(y), c), row(std::min(int(y) + 1, grid.height() - 1), c), y - int(y));
+    return ab;
 }
 
 [[noreturn]] void fail(const QString& message) { throw std::runtime_error(message.toUtf8().toStdString()); }
@@ -347,6 +506,7 @@ Uniforms uniforms(const Params& p, float midGrey) {
     u.blackPoint = float(p.blackPoint) / 100.0f;
     u.whitePoint = float(p.whitePoint) / 100.0f;
     u.midGrey = midGrey;
+    u.toneSpace = midGrey == proPhotoMidGrey ? ToneSpace::ProPhoto : ToneSpace::SRgb;
     const auto& cb = p.colorBalance;
     u.cbMaster = cb.master.rgbOffset();
     u.cbShadows = cb.shadows.rgbOffset();
@@ -376,43 +536,111 @@ bool isIdentity(const Uniforms& u) {
 Grade::Grade(const Params& params, float midGrey)
     : Grade(postdev::uniforms(params, midGrey), curveTables(params.curves)) {}
 
+Grade::Grade(const Params& params, float midGrey, const QColorSpace& space) : Grade(params, midGrey) {
+    if (space.primaries() == QColorSpace::Primaries::DciP3D65)
+        u_.toneSpace = ToneSpace::DisplayP3;
+    else if (space.transferFunction() == QColorSpace::TransferFunction::Gamma)
+        u_.toneSpace = ToneSpace::ProPhotoGamma18;
+}
+
 Grade::Grade(const Uniforms& uniforms, const CurveTables& tables)
     : u_(uniforms), tables_(tables), identity_(postdev::isIdentity(uniforms)) {}
 
+void Grade::prepareToneGuide(const float* data, int w, int h, int channels, std::ptrdiff_t stride) {
+    if (!needsToneGuide() || w <= 0 || h <= 0) return;
+    if (!stride) stride = std::ptrdiff_t(w) * channels;
+    guide_ = makeGuide(w, h, u_.toneSpace, [&](int x, int y) -> Rgb {
+        const auto* p = data + y * stride + x * channels;
+        return {p[0], p[1], p[2]};
+    });
+}
+void Grade::prepareToneGuide(const QImage& image) {
+    if (!needsToneGuide() || image.isNull()) return;
+    // Navigator, canvas and histogram use the same ungraded source, and a
+    // slider gesture changes only the weights, not its local exposure map.
+    static std::mutex lock;
+    static QCache<std::pair<qint64, int>, QImage> cache(4);
+    const auto space = u_.toneSpace;
+    const auto key = std::make_pair(image.cacheKey(), int(space));
+    {
+        std::lock_guard guard(lock);
+        if (const auto* found = cache.object(key)) {
+            guide_ = *found;
+            return;
+        }
+    }
+#ifdef Q_OS_WIN
+    guide_ = gpuToneGuide(image, space);
+#else
+    auto sample = [&](int x, int y) -> Rgb {
+        const auto* row = image.constScanLine(y);
+        switch (image.format()) {
+        case QImage::Format_RGBX16FPx4:
+        case QImage::Format_RGBA16FPx4: {
+            auto p = reinterpret_cast<const QRgbaFloat16*>(row)[x];
+            return {float(p.red()), float(p.green()), float(p.blue())};
+        }
+        case QImage::Format_RGBX32FPx4:
+        case QImage::Format_RGBA32FPx4: {
+            auto p = reinterpret_cast<const float*>(row) + 4 * x;
+            return {p[0], p[1], p[2]};
+        }
+        case QImage::Format_RGBX64:
+        case QImage::Format_RGBA64: {
+            auto p = reinterpret_cast<const quint16*>(row) + 4 * x;
+            return {p[0] / 65535.f, p[1] / 65535.f, p[2] / 65535.f};
+        }
+        default: {
+            const auto p = image.pixelColor(x, y);
+            return {p.redF(), p.greenF(), p.blueF()};
+        }
+        }
+    };
+    guide_ = makeGuide(image.width(), image.height(), space, sample);
+#endif
+    std::lock_guard guard(lock);
+    cache.insert(key, new QImage(guide_));
+}
+
 // layer2Tone, Shaders.metal:270-313, in its order and its float arithmetic.
-std::array<float, 3> Grade::tone(std::array<float, 3> c) const {
+std::array<float, 3> Grade::tone(std::array<float, 3> c, std::array<float, 4> ab) const {
     const auto& u = u_;
+    const auto space = u.toneSpace;
+    // Measure on the ungraded print; upstream moves must not move the mask.
+    const float sourceY = needsToneGuide() ? luminance(linearRgb(c, space), space) : 0;
+    const float base = needsToneGuide() ? ab[0] * toneStops(sourceY) + ab[1] : 0;
     // 1. white balance (scan-side gains on encoded values)
     for (int i = 0; i < 3; ++i) c[i] *= u.wbGain[i];
     // 2. exposure in a pseudo-linear domain, then contrast and brightness
     if (u.exposureGain != 1.0f)
         for (auto& v : c) v = positive(v) * u.exposureScale;
     if (u.contrast != 0.0f) {
-        const float k = 1.0f + u.contrast * 1.2f;
-        for (auto& v : c) v = (v - u.midGrey) * k + u.midGrey;
+        // Keep the slope continuous through neutral. At +50 the S-curve's
+        // middle-grey slope is 3.3, calibrated to the old +35 L* variance gain.
+        const float k = 1.0f + u.contrast * (1.2f + 6.8f * positive(u.contrast));
+        c = bendPrint(linearRgb(c, space), space, k);
     }
     if (u.brightness != 0.0f) {
         const float e = 1.0f / (1.0f + u.brightness * 0.8f);
         for (auto& v : c) v = std::pow(positive(v), e);
     }
-    // 3. highlights / shadows, measured from mid-grey
-    float l = tonePosition(luma(c), u.midGrey);
-    if (u.shadows != 0.0f) {
-        float w = 1.0f - l;
-        w = w * w;
-        const float k = u.shadows * 0.25f * w;
-        for (auto& v : c) v += k * (1.0f - v);
-    }
-    if (u.highlights != 0.0f) {
-        const float w = l * l;
-        const float k = u.highlights * 0.25f * w;
-        for (auto& v : c) v += k * (u.highlights > 0 ? (1.0f - v) : v);
+    if (needsToneGuide()) {
+        auto lin = linearRgb(c, space);
+        const float y = luminance(lin, space);
+        // The local base selects the range. Bend distances from black or
+        // white within that half of L*, leaving both endpoints anchored.
+        const float amount = y < .18f ? -u.shadows * smoothstep(0, 2, -base)
+                                      : u.highlights * smoothstep(0, 2, base);
+        if (amount != 0 && y < 1) {
+            const float k = pinnedSlope(lightness(sourceY), ab[2], ab[3], std::exp2(1.5f * amount));
+            if (k != 1) c = bendPrint(lin, space, k);
+        }
     }
     // 4. black / white point
     const float span = std::max(1.0f - u.blackPoint - u.whitePoint, 0.05f);
     for (auto& v : c) v = (v - u.blackPoint) / span;
     // 5. saturation
-    l = luma(c);
+    const float l = luma(c);
     for (auto& v : c) v = l + (v - l) * u.saturation;
     // 6. colour balance: master + three zones split at mid-grey
     const float ls = saturate(tonePosition(l, u.midGrey));
@@ -429,7 +657,7 @@ std::array<float, 3> Grade::tone(std::array<float, 3> c) const {
 // The rest of the kernel, Shaders.metal:350-403 (no masks, no DI decode).
 std::array<float, 3> Grade::pixel(std::array<float, 3> rgb, float u, float v) const {
     if (identity_) return rgb;
-    auto c = tone(rgb);
+    auto c = tone(rgb, guideAt(guide_, u, v));
     // 7. curves -- luma, then RGB master, then per channel
     if (u_.curvesActive) {
         const float* rows = tables_.data();
@@ -460,6 +688,12 @@ void Grade::apply(float* data, int width, int height, int channels, std::ptrdiff
     if (width < 0 || height < 0) throw std::invalid_argument("Post-Dev image size is negative");
     if (identity_ || width == 0 || height == 0) return;
     if (rowStride == 0) rowStride = std::ptrdiff_t(width) * channels;
+    if (needsToneGuide() && guide_.isNull()) {
+        Grade prepared = *this;
+        prepared.prepareToneGuide(data, width, height, channels, rowStride);
+        prepared.apply(data, width, height, channels, rowStride, threads, source);
+        return;
+    }
     const float sx = float(source.x), sy = float(source.y), sw = float(source.width), sh = float(source.height);
     const float fw = float(width), fh = float(height);
     forRows(height, threads, [&](int y) {
@@ -487,6 +721,12 @@ void Grade::apply(QImage& image, int threads, SourceRect source) const {
     default: throw std::invalid_argument("Post-Dev cannot grade this QImage format; convert it first");
     }
     if (identity_ || image.isNull()) return;
+    if (needsToneGuide() && guide_.isNull()) {
+        Grade prepared = *this;
+        prepared.prepareToneGuide(image);
+        prepared.apply(image, threads, source);
+        return;
+    }
     const int width = image.width(), height = image.height();
     const qsizetype stride = image.bytesPerLine();
     uchar* bits = image.bits();
@@ -533,16 +773,46 @@ void Grade::apply(QImage& image, int threads, SourceRect source) const {
 std::array<float, std140Bytes / sizeof(float)> std140(const Grade& grade) {
     const auto& u = grade.uniforms();
     const float on = grade.isIdentity() ? 0.0f : 1.0f;
-    return {u.wbGain[0], u.wbGain[1], u.wbGain[2], u.exposureScale,
-            u.contrast, u.brightness, u.saturation, u.highlights,
-            u.shadows, u.blackPoint, u.whitePoint, u.midGrey,
-            u.cbMaster[0], u.cbMaster[1], u.cbMaster[2], 0.0f,
-            u.cbShadows[0], u.cbShadows[1], u.cbShadows[2], 0.0f,
-            u.cbMidtones[0], u.cbMidtones[1], u.cbMidtones[2], 0.0f,
-            u.cbHighlights[0], u.cbHighlights[1], u.cbHighlights[2], 0.0f,
-            u.cbLum[0], u.cbLum[1], u.cbLum[2], u.cbLum[3],
-            u.vignetteAmount, u.vignetteMidpoint, 0.0f, 0.0f,
-            on, u.curvesActive ? 1.0f : 0.0f, u.exposureGain != 1.0f ? 1.0f : 0.0f, 0.0f};
+    return {u.wbGain[0],
+            u.wbGain[1],
+            u.wbGain[2],
+            u.exposureScale,
+            u.contrast,
+            u.brightness,
+            u.saturation,
+            u.highlights,
+            u.shadows,
+            u.blackPoint,
+            u.whitePoint,
+            u.midGrey,
+            u.cbMaster[0],
+            u.cbMaster[1],
+            u.cbMaster[2],
+            0.0f,
+            u.cbShadows[0],
+            u.cbShadows[1],
+            u.cbShadows[2],
+            0.0f,
+            u.cbMidtones[0],
+            u.cbMidtones[1],
+            u.cbMidtones[2],
+            0.0f,
+            u.cbHighlights[0],
+            u.cbHighlights[1],
+            u.cbHighlights[2],
+            0.0f,
+            u.cbLum[0],
+            u.cbLum[1],
+            u.cbLum[2],
+            u.cbLum[3],
+            u.vignetteAmount,
+            u.vignetteMidpoint,
+            0.0f,
+            0.0f,
+            on,
+            u.curvesActive ? 1.0f : 0.0f,
+            u.exposureGain != 1.0f ? 1.0f : 0.0f,
+            float(u.toneSpace)};
 }
 
 // --- JSON ------------------------------------------------------------------------

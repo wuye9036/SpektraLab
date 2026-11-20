@@ -1,4 +1,5 @@
 #include "ShellCapture.hpp"
+#include "UiFonts.hpp"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -9,7 +10,9 @@
 #include <QGuiApplication>
 #include <QJsonDocument>
 #include <QMutex>
+#include <QQmlEngine>
 #include <QQuickWindow>
+#include <QTextLayout>
 #include <QTimer>
 #include <QVariant>
 #include <memory>
@@ -115,8 +118,33 @@ void ShellCapture::finish(bool success,const QString& error) {
             if(!metrics.inFont(QChar(glyph)))missing.append(QStringLiteral("%1 U+%2").arg(family).arg(int(glyph),4,16,QLatin1Char('0')).toUpper());
     }
     QStringList warnings;{QMutexLocker lock(&messagesLock);warnings=qmlMessages();}
-    const bool passed=success&&warnings.isEmpty()&&missing.isEmpty()&&!families.isEmpty();
+    // Check the physical faces used by Qt after shaping, including the Latin
+    // extension on a Chinese filename. Inspecting QFont::family alone misses mixing.
+    auto* fonts = qmlEngine(&editor_)->singletonInstance<UiFonts*>("SpektraLab.Native", "UiFonts");
+    QJsonObject labelFaces;
+    bool labelsPassed = fonts != nullptr;
+    for (const QString& name : {QStringLiteral("DSC_0332.nef"), QStringLiteral("旅行照片 - DSC_0326.nef")}) {
+        if (!fonts) break;
+        QFont label(QStringLiteral("Segoe UI"));
+        label.setPixelSize(12);
+        label.setWeight(QFont::DemiBold);
+        QTextLayout layout(name, fonts->forText(label, name));
+        layout.beginLayout();
+        layout.createLine();
+        layout.endLayout();
+        QStringList used;
+        for (const auto& run : layout.glyphRuns()) {
+            used.append(run.rawFont().familyName());
+            if (run.glyphIndexes().contains(0)) labelsPassed = false;
+        }
+        used.removeDuplicates();
+        const QString expected = name.startsWith('D') ? "Segoe UI" : "Noto Sans SC";
+        labelsPassed &= used.size() == 1 && used.first().startsWith(expected);
+        labelFaces.insert(name, QJsonArray::fromStringList(used));
+    }
+    const bool passed=success&&warnings.isEmpty()&&missing.isEmpty()&&!families.isEmpty()&&labelsPassed;
     QJsonObject report{{"passed",passed},{"error",error},{"captures",captures_},
+                       {"filename_faces",labelFaces},
                        {"qml_warnings",QJsonArray::fromStringList(warnings)},
                        {"icon_fonts",families},{"missing_glyphs",missing},
                        {"platform",QGuiApplication::platformName()},{"qt_version",QString::fromLatin1(qVersion())}};

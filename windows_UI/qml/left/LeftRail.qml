@@ -31,7 +31,7 @@ Rectangle {
                 x: Theme.rowInset; anchors.verticalCenter: parent.verticalCenter
                 text: L10n.tr("rail.filmAndPrint")
                 color: Theme.text
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontRail; font.weight: Theme.weightTitle
+                font: Theme.forText(Theme.headingFont, text)
             }
         }
         Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Theme.rule }

@@ -130,12 +130,11 @@ std::vector<std::uint8_t> interleaved8(const QImage& rgb888) {
 }
 
 // The preview page: the file's own pixels, smaller (Exporter.preview(of:)),
-// long edge at most 2048.
-constexpr int kPreviewLongEdge=2048;
-QImage previewOf(const QImage& image) {
+// bounded by the preview preference.
+QImage previewOf(const QImage& image, int longEdge) {
     const int edge=std::max(image.width(),image.height());
-    if(edge<=kPreviewLongEdge)return image;
-    const double s=double(kPreviewLongEdge)/edge;
+    if(edge<=longEdge)return image;
+    const double s=double(longEdge)/edge;
     return image.scaled(std::max(1,int(std::lround(image.width()*s))),std::max(1,int(std::lround(image.height()*s))),
                         Qt::IgnoreAspectRatio,Qt::SmoothTransformation);
 }
@@ -274,7 +273,7 @@ Published writeImage(const QImage& pixels,const std::string& space,const fs::pat
             const auto rgb=interleaved16(pixels);
             spkhost::TiffPreview page;std::vector<std::uint8_t> pageRgb;
             if(o.preview) {
-                QImage reduced=previewOf(o.previewImage.isNull()?pixels:o.previewImage).convertToFormat(QImage::Format_RGB888);
+                QImage reduced=previewOf(o.previewImage.isNull()?pixels:o.previewImage,o.previewLongEdge).convertToFormat(QImage::Format_RGB888);
                 pageRgb=interleaved8(reduced);
                 page.rgb=pageRgb.data();page.width=std::uint32_t(reduced.width());page.height=std::uint32_t(reduced.height());
                 const QColorSpace tag=o.previewImage.isNull()?QColorSpace():o.previewImage.colorSpace();
@@ -332,10 +331,10 @@ QStringList copyDiViewLuts(const QString& directory,const fs::path& resources) {
     return written;
 }
 
-QImage diViewPreview(const QImage& cineon,const fs::path& resources) {
+QImage diViewPreview(const QImage& cineon,const fs::path& resources,int previewLongEdge) {
     const Cube& cube=diViewCube(resources);
     if(cube.size<2||cineon.isNull())return {};
-    const QImage reduced=previewOf(cineon.convertToFormat(QImage::Format_RGBA64));
+    const QImage reduced=previewOf(cineon.convertToFormat(QImage::Format_RGBA64),previewLongEdge);
     QImage out(reduced.size(),QImage::Format_RGBA64);
     const int n=cube.size;const float scale=float(n-1);
     auto at=[&](int r,int g,int b,int c){return cube.rgb[(std::size_t(b)*n*n+std::size_t(g)*n+r)*3+c];};
@@ -398,6 +397,7 @@ Outcome run(const Job& job,const FramePtr& frame,spk_engine* engine) {
     }
     const QImage pixels=framed(job,frame);
     WriteOptions options;
+    options.previewLongEdge=job.previewLongEdge;
     options.format=r.format;
     options.jpegQuality=std::clamp(int(std::lround(r.quality*100)),1,100);
     options.overwrite=r.existing==recipes::Existing::overwrite;
@@ -408,7 +408,7 @@ Outcome run(const Job& job,const FramePtr& frame,spk_engine* engine) {
         converted.rgba64=pixels;converted.identity=true;
         options.untagged=true;
         options.preview=true;
-        options.previewImage=diViewPreview(pixels,job.resources);
+        options.previewImage=diViewPreview(pixels,job.resources,job.previewLongEdge);
         const auto primaries=frame->encoding.color_space;
         if(primaries.find("ProPhoto RGB")==std::string::npos)
             outcome.note=QStringLiteral("This session renders in %1, so the Digital Intermediate carries %1 "

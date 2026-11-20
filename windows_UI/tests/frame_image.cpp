@@ -254,7 +254,7 @@ void reduction() {
     for(const auto [size,expected]:{std::pair{QSize(3001,2001),QSize(1024,683)},std::pair{QSize(2001,3001),QSize(683,1024)},
                                     std::pair{QSize(5000,3),QSize(1024,1)},std::pair{QSize(1025,1025),QSize(1024,1024)}}) {
         const auto source=synthetic(size.width(),size.height(),space);
-        const auto navigator=display::navigatorImage(source);
+        const auto navigator=display::navigatorImage(source,1024);
         check(navigator.size()==expected,"navigator size for "+std::to_string(size.width())+"x"+std::to_string(size.height()));
         check(navigator.format()==QImage::Format_RGBX16FPx4&&navigator.colorSpace()==space,"navigator lost its format or tag");
         const auto a=mean(source),b=mean(navigator);
@@ -280,7 +280,7 @@ void reduction() {
     std::vector<std::uint16_t> flat(std::size_t(1500)*900*4);
     for(std::size_t i=0;i<flat.size();i+=4){flat[i]=12345;flat[i+1]=40000;flat[i+2]=65535;flat[i+3]=65535;}
     const auto field=display::halfImage(flat.data(),1500,900,1500,space);
-    const auto reduced=display::navigatorImage(field);
+    const auto reduced=display::navigatorImage(field,1024);
     const auto first=floats(field,0);
     for(int y=0;y<reduced.height();++y) {
         const auto row=floats(reduced,y);
@@ -290,8 +290,8 @@ void reduction() {
     ++checks;
     // Small enough already: the same image, not a copy.
     const auto small=synthetic(800,600,space);
-    check(display::navigatorImage(small).cacheKey()==small.cacheKey(),"a small image was copied for the navigator");
-    refused([&]{display::navigatorImage(QImage(2000,10,QImage::Format_ARGB32));},"8-bit image reduced as if half float");
+    check(display::navigatorImage(small,1024).cacheKey()==small.cacheKey(),"a small image was copied for the navigator");
+    refused([&]{display::navigatorImage(QImage(2000,10,QImage::Format_ARGB32),1024);},"8-bit image reduced as if half float");
     refused([&]{display::downscaled(small,QSize(0,10));},"empty bound accepted");
 }
 
@@ -309,7 +309,7 @@ void timing() {
         QElapsedTimer clock;clock.start();
         image=display::halfImage(rgba.data(),width,height,width,space);
         convert=std::min(convert,clock.nsecsElapsed()/1e6);clock.restart();
-        navigator=display::navigatorImage(image);
+        navigator=display::navigatorImage(image,1024);
         navigate=std::min(navigate,clock.nsecsElapsed()/1e6);clock.restart();
         const auto thumbnail=display::thumbnailImage(navigator);
         thumb=std::min(thumb,clock.nsecsElapsed()/1e6);

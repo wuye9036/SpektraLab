@@ -39,7 +39,7 @@ Item {
             anchors.centerIn: parent
             text: chip.label
             color: chip.on ? Theme.card : Theme.text
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta + 1; font.weight: Theme.weightText
+            font: Theme.forText(Theme.valueFont, text)
         }
     }
     z: dragArea.drag.active ? 10 : 0

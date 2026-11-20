@@ -1,4 +1,5 @@
 #include "AppSettings.hpp"
+#include "desktop/preview_size.hpp"
 
 #include <QDebug>
 #include <QDir>
@@ -21,6 +22,10 @@ AppSettings::AppSettings(const QString& filePath,QObject* parent)
 }
 
 AppSettings::~AppSettings() {flush();}
+
+int AppSettings::previewLongEdge() const {
+    return spk::desktop::previewImageLongEdge(value(QStringLiteral("rendering.previewLongEdge")).toInt());
+}
 
 QString AppSettings::defaultFilePath() {
     return QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)).filePath(kFileName);

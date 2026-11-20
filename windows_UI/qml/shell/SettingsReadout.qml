@@ -23,7 +23,7 @@ RowLayout {
         text: readout.label
         color: Theme.dim
         elide: Text.ElideRight
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+        font: Theme.forText(Theme.captionFont, text)
     }
     TextEdit {
         Layout.fillWidth: true
@@ -36,6 +36,6 @@ RowLayout {
         color: readout.warning ? Theme.warning : Theme.text
         selectionColor: Theme.accent
         selectedTextColor: Theme.selectionInk
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+        font: Theme.forText(Theme.captionFont, text)
     }
 }

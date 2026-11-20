@@ -17,7 +17,12 @@ file(GLOB_RECURSE libraw_sources CONFIGURE_DEPENDS "${SPEKTRALAB_LIBRAW_SOURCE}/
 list(FILTER libraw_sources EXCLUDE REGEX "/[^/]*_ph\\.cpp$")
 add_library(spk_libraw STATIC ${libraw_sources})
 target_include_directories(spk_libraw PUBLIC "${SPEKTRALAB_LIBRAW_SOURCE}")
-target_compile_definitions(spk_libraw PUBLIC LIBRAW_NODLL PRIVATE LIBRAW_NOTHREADS)
+target_compile_definitions(spk_libraw PUBLIC LIBRAW_NODLL)
+# The Windows editor decodes the selected frame and the library previews on
+# different workers. LibRaw's reentrant build gives each decoder its own bit reader.
+if(NOT WIN32)
+    target_compile_definitions(spk_libraw PRIVATE LIBRAW_NOTHREADS)
+endif()
 target_compile_features(spk_libraw PUBLIC cxx_std_11)
 set_target_properties(spk_libraw PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(WIN32)

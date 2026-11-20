@@ -1,4 +1,5 @@
 #pragma once
+#include "NativeCanvasFrame.hpp"
 // The picture half of FrameCanvas's scene graph: the frame drawn through the
 // display LUT of ColorPipeline.hpp.
 //
@@ -38,12 +39,18 @@
 #include <memory>
 #include <vector>
 
+class QSGTexture;
 class QQuickWindow;
 class QSGSimpleTextureNode;
 
 // What one paint of a canvas needs. Filled by FrameCanvas::updatePaintNode on
 // the render thread while the GUI thread is blocked.
 struct CanvasPaint {
+#ifdef Q_OS_WIN
+    std::shared_ptr<spk::gpu::SharedDisplay> nativeFrame;
+    QSize nativeSize;
+    std::function<QImage()> hostImage;
+#endif
     QImage image;
     quint64 revision = 0;                 // changes whenever image does
     std::shared_ptr<const ColorLut> lut;  // never null; size 0 is identity
@@ -72,6 +79,10 @@ public:
     // the node and draws nothing, as the old QSGSimpleTextureNode path did.
     bool update(QQuickWindow* window, const CanvasPaint& paint);
 
+#ifdef Q_OS_WIN
+    std::weak_ptr<spk::gpu::SharedDisplay> fallbackFrame_;
+    QImage fallbackImage_;
+#endif
     struct Tile;
     class CurveTable;
     class ProofTable;
@@ -92,6 +103,8 @@ private:
     bool softwareLutActive_ = false, softwareDither_ = false;
     // Post-Dev: the curve texture every tile's material shares, and what the
     // software texture was graded with.
+    std::shared_ptr<QSGTexture> toneGuide_;
+    qint64 toneGuideKey_ = -1;
     std::shared_ptr<CurveTable> curves_;
     quint64 curvesRevision_ = ~quint64(0), softwareGrade_ = 0;
     spk::desktop::postdev::SourceMap softwareMap_;

@@ -14,8 +14,7 @@ ApplicationWindow {
     visible: false
     flags: Qt.Dialog
     color: Theme.card
-    font.family: Theme.fontFamily
-    font.pixelSize: Theme.fontLabel
+    font: Theme.labelFont
     palette.window: Theme.card
     palette.windowText: Theme.text
     palette.text: Theme.text

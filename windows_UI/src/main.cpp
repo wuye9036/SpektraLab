@@ -12,9 +12,9 @@
 #include "FrameCanvas.hpp"
 #include "FrameImage.hpp"
 #include "Localizer.hpp"
+#include "UiFonts.hpp"
 #include "Messages.hpp"
 #include <QCommandLineParser>
-#include <QSGRendererInterface>
 #include <QThread>
 #include <QCryptographicHash>
 #include <QElapsedTimer>
@@ -30,6 +30,7 @@
 #include <QQmlEngine>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSGRendererInterface>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QStandardPaths>
@@ -303,7 +304,7 @@ private:
         checks_["navigator_width"]=navigator.width();checks_["navigator_height"]=navigator.height();
         checks_["navigator_mean_error"]=meanError;
         if(!require(navigator.format()==QImage::Format_RGBX16FPx4&&navigator.colorSpace()==preview.colorSpace()&&
-                    navigatorEdge==std::min(display::kNavigatorLongEdge,previewEdge)&&
+                    navigatorEdge==std::min(controller_.previewImageEdge(),previewEdge)&&
                     std::abs(double(navigator.width())/navigator.height()-double(preview.width())/preview.height())<
                         2.0/std::min(navigator.width(),navigator.height())&&meanError<1e-3,
                     "navigator_reduced_same_tag_mean_kept"))return false;
@@ -1070,7 +1071,7 @@ QString earlyOption(int argc,char** argv,const char* name) {
 int main(int argc,char** argv) {
     // The Windows offscreen plugin uses a file font database instead of the
     // native DirectWrite one. Reuse installed system fonts for the explicit
-    // test platform; no fonts are copied or bundled with the application.
+    // test platform alongside the bundled fallback.
     if(qEnvironmentVariable("QT_QPA_PLATFORM")=="offscreen"&&qEnvironmentVariableIsEmpty("QT_QPA_FONTDIR"))
         qputenv("QT_QPA_FONTDIR",(qEnvironmentVariable("WINDIR")+"/Fonts").toUtf8());
     // Preserve Qt diagnostics when launched by a validation runner with
@@ -1096,6 +1097,8 @@ int main(int argc,char** argv) {
     if(!startup.interfaceScaleFromEnvironment&&startup.activeInterfaceScale!=QLatin1String("115"))
         qputenv("QT_SCALE_FACTOR",QByteArray::number(AppInfo::scaleFactor(startup.activeInterfaceScale),'f',4));
     QGuiApplication app(argc,argv);
+    UiFonts uiFonts;
+    qmlRegisterSingletonInstance("SpektraLab.Native",1,0,"UiFonts",&uiFonts);
     QQuickStyle::setStyle("Basic");
     QCommandLineParser parser;parser.setApplicationDescription("SpektraLab Windows Qt Quick preview");parser.addHelpOption();
     parser.addOptions({{"resources","Engine resource directory","directory"},
@@ -1171,18 +1174,13 @@ int main(int argc,char** argv) {
     DisplaySettings displaySettings(appSettings);
     // Set on the GUI thread, consumed by the factory on the worker.
     auto failDisplay=std::make_shared<std::atomic_bool>(false);
-    // The preview resolution (Settings > Rendering), macOS's choices and
-    // default (ARCHITECTURE.md §7.3): every edit develops at this long edge
-    // and the full frame follows when the edits stop. Read once, at start.
-    const int previewEdge=[&]{
-        if(parser.isSet(previewEdgeOption))return std::clamp(parser.value(previewEdgeOption).toInt(),0,8192);
-        if(testing||snapshot)return 0;
-        const int v=appSettings.value("rendering.previewLongEdge",2560).toInt();
-        return v==1080||v==1920||v==2560||v==3840?v:2560;
-    }();
+    const bool overridePreview = parser.isSet(previewEdgeOption);
+    const int overrideEdge = parser.value(previewEdgeOption).toInt();
+    const int previewEdge = overridePreview && overrideEdge > 0 ? overrideEdge : appSettings.previewLongEdge();
+    const bool liveDevelopment = overridePreview ? overrideEdge > 0 : !testing && !snapshot;
     PreviewController controller(std::filesystem::path(resources.toStdWString()),nullptr,
-        [failDisplay](const auto& frame){if(failDisplay->exchange(false))throw std::runtime_error("Injected display publication failure");return PreviewController::imageFromFrame(frame);},
-        editDirectory,requestedSpace,previewEdge);
+        testing ? PreviewController::ImageFactory([failDisplay](const auto& frame){if(failDisplay->exchange(false))throw std::runtime_error("Injected display publication failure");return PreviewController::imageFromFrame(frame);}) : PreviewController::ImageFactory{},
+        editDirectory,requestedSpace,previewEdge,!testing && QQuickWindow::graphicsApi()==QSGRendererInterface::Direct3D11,liveDevelopment);
     qmlRegisterType<FrameCanvas>("SpektraLab.Native",1,0,"FrameCanvas");
     // The crop grips' arithmetic and the held Space key (CanvasTools.hpp).
     CanvasTools canvasTools;
@@ -1277,7 +1275,7 @@ int main(int argc,char** argv) {
             const auto layer=parser.value(pairLayer);
             const auto crop=parser.value(snapshotCrop).split(',');
             QObject::connect(&controller,&PreviewController::operationFinished,&app,[&controller,sets,capture,layer,crop](const QString& operation,bool ok){
-                if(!ok){QCoreApplication::exit(1);return;}
+                if(!ok){qWarning().noquote()<<operation<<controller.status();QCoreApplication::exit(1);return;}
                 if(operation=="open"&&!layer.isEmpty())controller.setPairLayer(layer);
                 if(operation=="open"&&crop.size()>=4) {
                     controller.setCropGeometry(QRectF(crop[0].toDouble(),crop[1].toDouble(),crop[2].toDouble(),crop[3].toDouble()),0);

@@ -10,6 +10,11 @@
 #include <QSGSimpleTextureNode>
 #include <QSGTexture>
 #include <rhi/qrhi.h>
+#ifdef Q_OS_WIN
+#include <d3d11.h>
+#include "gpu/d3d11_target.hpp"
+#include <rhi/qrhi_platform.h>
+#endif
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -202,9 +207,31 @@ public:
     ~FrameTexture() override {delete texture_;}
     // `source` is the part of `image` this texture holds, apron included.
     void setSource(const QImage& image,const QRect& source,const Upload& upload) {
+#ifdef Q_OS_WIN
+        if (native_) { delete texture_; texture_=nullptr; native_.reset(); }
+#endif
         image_=image;source_=source;format_=upload.format;convertTo_=upload.convertTo;
         alpha_=image.hasAlphaChannel();pending_=true;
     }
+#ifdef Q_OS_WIN
+    bool setNative(QRhi* rhi, const spk::gpu::DisplayTexture& frame, QSize size) {
+        if (rhi->backend() != QRhi::D3D11) return false;
+        auto* device=static_cast<ID3D11Device*>(static_cast<const QRhiD3D11NativeHandles*>(rhi->nativeHandles())->dev);
+        auto acquired=frame->open(device);
+        if (!acquired) return false;
+        auto wrapper = std::unique_ptr<QRhiTexture>(rhi->newTexture(QRhiTexture::RGBA16F, size));
+        if (!wrapper->createFrom({quint64(quintptr(acquired.get())), 0})) return false;
+        delete texture_;
+        texture_ = wrapper.release();
+        native_ = std::move(acquired);
+        if (qEnvironmentVariableIsSet("SPEKTRAFILM_TRANSFER_TIMINGS"))
+            qInfo("D3D11 canvas imported %dx%d shared texture",size.width(),size.height());
+        source_ = QRect(QPoint(), size);
+        image_ = {};
+        pending_ = alpha_ = false;
+        return true;
+    }
+#endif
     qint64 comparisonKey() const override {return qint64(quintptr(this));}
     QRhiTexture* rhiTexture() const override {return texture_;}
     QSize textureSize() const override {return source_.size();}
@@ -236,6 +263,9 @@ public:
 private:
     QImage image_;
     QRect source_;
+#ifdef Q_OS_WIN
+    std::shared_ptr<ID3D11Texture2D> native_;
+#endif
     QRhiTexture::Format format_=QRhiTexture::BGRA8;
     QImage::Format convertTo_=QImage::Format_Invalid;
     QRhiTexture* texture_=nullptr;
@@ -390,6 +420,7 @@ public:
         if(int c=order(frame_->comparisonKey(),that->frame_->comparisonKey()))return c;
         if(int c=order(key(lut),key(that->lut)))return c;
         if(int c=order(key(curves),key(that->curves)))return c;
+        if(int c=order(toneGuide.get(),that->toneGuide.get()))return c;
         if(int c=order(postdevCurves.get(),that->postdevCurves.get()))return c;
         if(int c=std::memcmp(grade.data(),that->grade.data(),sizeof grade))return c<0?-1:1;
         if(int c=std::memcmp(source.data(),that->source.data(),sizeof source))return c<0?-1:1;
@@ -401,6 +432,7 @@ public:
     Variant variant() const {return variant_;}
     FrameTexture* frame() const {return frame_;}
     std::shared_ptr<LutTexture> lut;       // the table; null without a lookup
+    std::shared_ptr<QSGTexture> toneGuide;
     std::shared_ptr<LutTexture> curves;    // the 1-D curves; null without them
     float dither=0;
     // Post-Dev: the canvas's curve texture, the std140 grade (all zeros is
@@ -463,6 +495,7 @@ public:
         QSGTexture* bound=binding==1?static_cast<QSGTexture*>(material->frame()):
             binding==2?static_cast<QSGTexture*>(material->lut.get()):
             binding==3?static_cast<QSGTexture*>(material->curves.get()):
+            binding==6?material->toneGuide.get():
             binding==5?static_cast<QSGTexture*>(material->proofTable.get()):material->postdevCurves.get();
         if(bound)bound->commitTextureOperations(state.rhi(),state.resourceUpdateBatch());
         *texture=bound;
@@ -566,6 +599,12 @@ QImage applyDisplayLutCpu(const QImage& image,const ColorLut& lut,bool dither,co
     if(image.isNull())return image;
     const bool proofing=proof && proof->evaluate;
     const bool active=displayLutActive(lut);
+    std::optional<postdev::Grade> prepared;
+    if (grade && grade->needsToneGuide() && grade->toneGuide().isNull()) {
+        prepared=*grade;
+        prepared->prepareToneGuide(image);
+        grade=&*prepared;
+    }
     const bool graded=grade && !grade->isIdentity();
     const auto format=image.format();
     const bool eightBit=format==QImage::Format_RGB32 || format==QImage::Format_ARGB32 ||
@@ -652,6 +691,27 @@ void ColorCanvasNode::clear() {
 }
 
 bool ColorCanvasNode::update(QQuickWindow* window,const CanvasPaint& paint) {
+#ifdef Q_OS_WIN
+    if (paint.nativeFrame && paint.hostImage) {
+        if (fallbackFrame_.lock()!=paint.nativeFrame) {
+            fallbackImage_={};
+            if (window->rhi() && window->rhi()->backend()==QRhi::D3D11 &&
+                updateRhi(window,paint)) return true;
+            fallbackFrame_=paint.nativeFrame;
+            try { fallbackImage_=paint.hostImage(); }
+            catch (const std::exception& error) {
+                qWarning("FrameCanvas: cannot recover full display pixels: %s",error.what());
+                fallbackImage_=paint.image;
+            }
+        }
+        CanvasPaint fallback=paint;
+        fallback.nativeFrame.reset();
+        fallback.image=fallbackImage_;
+        return window->rhi()?updateRhi(window,fallback):updateSoftware(window,fallback);
+    }
+    fallbackFrame_.reset();
+    fallbackImage_={};
+#endif
     return window->rhi()?updateRhi(window,paint):updateSoftware(window,paint);
 }
 
@@ -664,7 +724,12 @@ bool ColorCanvasNode::updateRhi(QQuickWindow* window,const CanvasPaint& paint) {
     if(tiles_.empty() || paint.revision!=revision_ || limit!=tileLimit_) {
         if(paint.image.isNull())return false;
         const Upload upload=uploadable(rhi,paint.image);
-        const QSize size=paint.image.size();
+        QSize size=paint.image.size();
+#ifdef Q_OS_WIN
+        const bool native = paint.nativeFrame && paint.nativeSize.width() <= limit && paint.nativeSize.height() <= limit;
+        if (paint.nativeFrame && !native) return false;
+        if (native) size=paint.nativeSize;
+#endif
         const bool alpha=paint.image.hasAlphaChannel();
         const auto columns=spans(size.width(),limit),rows=spans(size.height(),limit);
         const size_t count=columns.size()*rows.size();
@@ -690,7 +755,12 @@ bool ColorCanvasNode::updateRhi(QQuickWindow* window,const CanvasPaint& paint) {
                 tile.interior=QRect(QPoint(left,top),QPoint(right-1,bottom-1));
                 tile.source=QRect(QPoint(std::max(0,left-1),std::max(0,top-1)),
                     QPoint(std::min(size.width(),right+1)-1,std::min(size.height(),bottom+1)-1));
-                tile.texture->setSource(paint.image,tile.source,upload);
+#ifdef Q_OS_WIN
+                if (native) {
+                    if (!tile.texture->setNative(rhi,paint.nativeFrame,size)) return false;
+                } else
+#endif
+                    tile.texture->setSource(paint.image,tile.source,upload);
                 tile.textureRect={};  // re-derive the texture coordinates below
                 // The Copy material's blending follows the frame's alpha.
                 if(alpha!=alpha_)tile.node->setOpaqueMaterial(nullptr);
@@ -726,6 +796,20 @@ bool ColorCanvasNode::updateRhi(QQuickWindow* window,const CanvasPaint& paint) {
     // its curves changed, the canvas's curve texture.
     const bool graded=paint.grade && !paint.grade->isIdentity();
     std::array<float,postdev::std140Bytes/sizeof(float)> block{};
+    const QImage guide=graded ? paint.grade->toneGuide() : QImage{};
+    if(guide.cacheKey()!=toneGuideKey_ || !toneGuide_) {
+        static const QImage neutral=[]{
+            QImage image(1,1,QImage::Format_RGBA32FPx4);
+            image.fill(Qt::red); // a=1, b=0
+            return image;
+        }();
+        const QImage& pixels=guide.isNull()?neutral:guide;
+        auto texture=std::make_shared<FrameTexture>();
+        texture->setSource(pixels,pixels.rect(),{QRhiTexture::RGBA32F});
+        texture->setFiltering(QSGTexture::Nearest);
+        toneGuide_=texture;
+        toneGuideKey_=guide.cacheKey();
+    }
     bool curvesChanged=false;
     if(!curves_)curves_=std::make_shared<CurveTable>();
     if(graded) {
@@ -766,10 +850,10 @@ bool ColorCanvasNode::updateRhi(QQuickWindow* window,const CanvasPaint& paint) {
         const std::array<float,8> source{float(map.a*sw),float(map.b*sh),float(map.a*sl+map.b*st+map.c),0,
                                          float(map.d*sw),float(map.e*sh),float(map.d*sl+map.e*st+map.f),0};
         if(material->lut!=lut || material->curves!=curves || material->dither!=dither ||
-           material->postdevCurves!=curves_ || material->grade!=block || material->source!=source ||
+           material->toneGuide!=toneGuide_ || material->postdevCurves!=curves_ || material->grade!=block || material->source!=source ||
            material->warning!=warning || material->proof!=proofBlock || material->proofTable!=proofTable_ || curvesChanged) {
             material->lut=lut;material->curves=curves;material->dither=dither;
-            material->postdevCurves=curves_;material->grade=block;material->source=source;material->warning=warning;
+            material->toneGuide=toneGuide_;material->postdevCurves=curves_;material->grade=block;material->source=source;material->warning=warning;
             material->proof=proofBlock;material->proofTable=proofTable_;
             tile->node->markDirty(QSGNode::DirtyMaterial);
         }

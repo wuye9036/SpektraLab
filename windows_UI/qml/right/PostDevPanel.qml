@@ -35,7 +35,7 @@ ScrollView {
                 text: L10n.tr("postDev.bypassed")
                 color: Theme.accent
                 wrapMode: Text.WordWrap
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                font: Theme.forText(Theme.captionFont, text)
             }
         }
         PostDevWhiteBalanceSection {}

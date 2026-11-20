@@ -28,14 +28,14 @@ Rectangle {
             Text {
                 text: preview.batchExporting ? L10n.tr("status.batchExport") : preview.failed ? L10n.tr("status.failed") : L10n.tr("status.title")
                 color: preview.failed ? Theme.warning : Theme.secondaryText
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightTitle
+                font: Theme.forText(Theme.strongCaptionFont, text)
             }
             Text {
                 Layout.fillWidth: true
                 text: footer.editor.closePending ? L10n.tr("status.closing") : preview.status
                 elide: Text.ElideRight
                 color: preview.failed ? Theme.warning : Theme.dim
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                font: Theme.forText(Theme.captionFont, text)
                 HoverHandler { id: statusHover }
                 ToolTip.visible: statusHover.hovered && truncated
                 ToolTip.text: text

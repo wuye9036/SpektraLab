@@ -1,4 +1,7 @@
 #include "PostDevView.hpp"
+#ifdef Q_OS_WIN
+#include "PostDevGpu.hpp"
+#endif
 #include <QColorSpace>
 #include <QJsonObject>
 #include <QtGui/qrgbafloat.h>
@@ -60,15 +63,28 @@ Params paramsFrom(const QVariantMap& map, QString* error) {
     }
 }
 
-std::optional<Grade> gradeFor(const Params& params, const QColorSpace& space) {
+std::optional<Grade> gradeFor(const Params& params, const QColorSpace& space, const QImage& source, const QImage& preparedGuide) {
     const auto midGrey = midGreyFor(space.isValid() ? space : QColorSpace(QColorSpace::SRgb));
     if (!midGrey) return std::nullopt;
-    Grade grade(params, *midGrey);
+    Grade grade(params, *midGrey, space);
     if (grade.isIdentity()) return std::nullopt;
+    if (grade.needsToneGuide() && !preparedGuide.isNull()) grade.setPreparedToneGuide(preparedGuide);
+    else grade.prepareToneGuide(source);
     return grade;
 }
 
 void gradeImage(QImage& image, const Grade& grade, const SourceMap& map, int threads) {
+    if (!image.isNull() && grade.needsToneGuide() && grade.toneGuide().isNull()) {
+        Grade prepared=grade;
+        prepared.prepareToneGuide(image);
+        gradeImage(image,prepared,map,threads);
+        return;
+    }
+#ifdef Q_OS_WIN
+    if (image.isNull() || grade.isIdentity()) return;
+    gpuGradeImage(image, grade, {float(map.a),float(map.b),float(map.c),float(map.d),float(map.e),float(map.f)});
+    return;
+#endif
     enum class Kind { half, single, u16 } kind;
     switch (image.format()) {
     case QImage::Format_RGBX16FPx4: case QImage::Format_RGBA16FPx4: kind = Kind::half; break;

@@ -17,9 +17,7 @@ MenuItem {
     // The row is 24 px; the label is vertically centred in all of it (an
     // eliding Text shows no line that does not fit its height).
     topPadding: 0; bottomPadding: 0
-    font.family: Theme.fontFamily
-    font.pixelSize: Theme.fontLabel
-    font.weight: Theme.weightText
+    font: Theme.forText(Theme.labelFont, text)
     contentItem: Text {
         id: label
         text: item.text

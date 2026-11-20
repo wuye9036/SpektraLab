@@ -94,12 +94,15 @@ Item {
         id: frameCanvas
         objectName: "frameCanvas"
         anchors.fill: parent
-        image: view.editor.cropMode ? preview.uncroppedImage : view.showOriginal ? preview.originalImage : preview.previewImage
+        image: view.editor.cropMode ? preview.canvasWholeImage : view.showOriginal ? preview.originalImage : preview.canvasPreviewImage
+        nativeDisplay: view.editor.cropMode ? preview.nativeWhole : view.showOriginal ? undefined : preview.nativePreview
         interactive: !view.editor.cropMode
         // Post-Dev on the print and in the crop editor (the whole source),
         // never on the Original, which is the decode before any of it.
         // A cut frame's crop editor shows the undeveloped whole decode, which
         // the Mac draws as the Original (Session.swift:407-411), ungraded.
+        preparedToneGuide: preview.preparedToneGuide
+        toneSource: preview.postDevToneSource
         postDev: view.showOriginal || (view.editor.cropMode && preview.frameIsCut) ? ({}) : preview.canvasPostDev
         sourceMap: view.editor.cropMode ? [] : preview.postDevSourceMap
         // The soft proof (S) and its gamut warning (Shift+S): whatever the
@@ -178,7 +181,7 @@ Item {
             visible: view.splitX - edge > 24 + width
             x: edge; y: compareChrome.lineTop + 8
             text: L10n.tr("canvas.before")
-            color: Theme.text; font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightTitle
+            color: Theme.text; font: Theme.forText(Theme.strongCaptionFont, text)
             leftPadding: 6; rightPadding: 6; topPadding: 2; bottomPadding: 2
             background: Rectangle { radius: height / 2; color: Qt.rgba(0.176, 0.176, 0.173, 0.8) }
         }
@@ -189,7 +192,7 @@ Item {
             x: edge - width
             y: view.width - edge < 220 ? Math.max(compareChrome.lineTop + 8, badges.y + badges.height + 4) : compareChrome.lineTop + 8
             text: L10n.tr("canvas.after")
-            color: Theme.text; font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightTitle
+            color: Theme.text; font: Theme.forText(Theme.strongCaptionFont, text)
             leftPadding: 6; rightPadding: 6; topPadding: 2; bottomPadding: 2
             background: Rectangle { radius: height / 2; color: Qt.rgba(0.176, 0.176, 0.173, 0.8) }
         }
@@ -254,20 +257,19 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             text: L10n.tr("app.name")
             color: Theme.text
-            font.family: Theme.fontFamily; font.pixelSize: 30; font.weight: Font.Light
-            font.letterSpacing: 1
+            font: Theme.forText(Theme.wordmarkFont, text)
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: L10n.tr("canvas.emptyHint")
             color: Theme.secondaryText
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+            font: Theme.forText(Theme.labelFont, text)
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: L10n.tr("canvas.dropHint")
             color: "#c9c7c2"
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+            font: Theme.forText(Theme.valueFont, text)
         }
     }
     DropArea {
@@ -364,7 +366,7 @@ Item {
             anchors.right: parent.right
             text: view.editor.cropMode ? L10n.tr("canvas.badge.uncropped") : L10n.tr("canvas.badge.full")
             color: Theme.text
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightTitle
+            font: Theme.forText(Theme.strongCaptionFont, text)
             style: Text.Raised; styleColor: "#99000000"
         }
         // Session.canvasBadges: "original · decode" while the whole canvas
@@ -375,7 +377,7 @@ Item {
             visible: view.showOriginal || (view.editor.originalWanted && preview.originalPending && !preview.originalReady)
             text: preview.originalPending && !preview.originalReady ? L10n.tr("canvas.badge.originalPending") : L10n.tr("canvas.badge.original")
             color: Theme.text
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightTitle
+            font: Theme.forText(Theme.strongCaptionFont, text)
             style: Text.Raised; styleColor: "#99000000"
         }
         // "proof · sRGB" while the canvas is a soft proof ("…" until the
@@ -387,7 +389,7 @@ Item {
             text: preview.proofState.ready ? L10n.tr("canvas.badge.proof", [preview.proofState.space])
                                            : L10n.tr("canvas.badge.proofPending", [preview.proofState.space])
             color: Theme.accent
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightTitle
+            font: Theme.forText(Theme.strongCaptionFont, text)
             style: Text.Raised; styleColor: "#99000000"
         }
         Text {
@@ -395,7 +397,7 @@ Item {
             visible: preview.softProof && preview.gamutWarning
             text: L10n.tr("canvas.badge.gamutWarning")
             color: Theme.text
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightTitle
+            font: Theme.forText(Theme.strongCaptionFont, text)
             style: Text.Raised; styleColor: "#99000000"
         }
     }

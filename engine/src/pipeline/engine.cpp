@@ -20,6 +20,9 @@
 // caller's own retention is the cache, and `spk_session_release` is when it
 // ends. The `session_cache` field stays in `capabilities` so the frontend's
 // status bar keeps working; it reports the sessions currently open.
+#ifdef _WIN32
+#include "gpu/d3d11_target.hpp"
+#endif
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -1170,7 +1173,11 @@ bool materialise(spk_session* session, const Image& rgb, spk_result* out, std::s
 }
 
 spk_status render_tier(spk_session* session, const char* tier_name, bool use_reprint,
-                       spk_result* out) {
+                       spk_result* out
+#ifdef _WIN32
+                       , gpu::D3D11Publication* display = nullptr, bool retainExact = false, bool fallback = false
+#endif
+                       ) {
     if (!session || !out) { g_error = "session or result is null"; return SPK_ERR_INVALID_ARG; }
     const Tier* tier = find_tier(tier_name);
     if (!tier) {
@@ -1223,7 +1230,40 @@ spk_status render_tier(spk_session* session, const char* tier_name, bool use_rep
         ok = session->pipeline->set_overscan_frame(state.overscan_frame_w, state.overscan_frame_h, error);
     }
     if (ok) ok = run_print_for(session, negative, rgb, &session->progress, error);
+#ifdef _WIN32
+    if (ok && display) {
+        // The print is complete. Release unused development planes before
+        // allocating the shared canvas texture and its exact export codes.
+        // Keep a small working set between interactive preview samples. The
+        // full-resolution publication gives it back along with its own scratch.
+        constexpr size_t previewScratch = 64u * 1024u * 1024u;
+        gpu->trim_pool(tier->long_edge ? std::max(rgb.bytes(), previewScratch) : rgb.bytes());
+        gpu::BufferRef exact;
+        display->texture = gpu::make_d3d11_display(*gpu, rgb.buf.get(), rgb.w, rgb.h, *display, retainExact ? &exact : nullptr, error);
+        if (display->texture) {
+            out->width = rgb.w;
+            out->height = rgb.h;
+            if (exact) display->readPixels = [gpu, exact, w=rgb.w, h=rgb.h](spk_result& pixels, std::string& why) {
+                pixels.texture = gpu->texture(exact.get(), w, h, w, why);
+                pixels.rgba16 = static_cast<const uint16_t*>(pixels.texture);
+                pixels.row_stride_px = w;
+                return pixels.texture != nullptr;
+            };
+        } else if (fallback) {
+            exact = {};
+            if (std::getenv("SPEKTRAFILM_TRANSFER_TIMINGS"))
+                std::fprintf(stderr, "D3D11 frame fallback: %s\n", error.c_str());
+            error.clear();
+            ok = materialise(session, rgb, out, error);
+        } else ok = false;
+    } else
+#endif
     if (ok) ok = materialise(session, rgb, out, error);
+#ifdef _WIN32
+    if (ok && display && display->texture && std::getenv("SPEKTRAFILM_TRANSFER_TIMINGS"))
+        std::fprintf(stderr, "{\"d3d11_display\":true,\"width\":%u,\"height\":%u,\"exact_gpu_bytes\":%zu}\n",
+                     rgb.w, rgb.h, retainExact ? size_t(rgb.w)*rgb.h*8 : size_t(0));
+#endif
     gpu->end_frame();
 
     if (!ok) {
@@ -1251,6 +1291,15 @@ spk_status spk_render(spk_session* session, const char* tier, spk_result* out) {
 }
 
 }  // extern "C"
+
+#ifdef _WIN32
+spk_status spk::gpu::render_d3d11(spk_session* session, const char* tier, bool reprint,
+                                  D3D11Publication& display, spk_result& metadata, bool retainExact, bool fallback) {
+    display.texture.reset();
+    display.readPixels = {};
+    return render_tier(session, tier, reprint, &metadata, &display, retainExact, fallback);
+}
+#endif
 
 // The LUT methods' helpers, outside the C block: they take and return C++
 // types, and a C-linkage function that returns a `Json` is a warning today

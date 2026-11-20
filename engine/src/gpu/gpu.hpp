@@ -391,6 +391,12 @@ public:
     virtual void* texture(Buffer* b, uint32_t width, uint32_t height,
                           uint32_t row_stride_px, std::string& error) = 0;
     virtual void release_texture(void* texture) = 0;
+#ifdef _WIN32
+    // Import a fresh shared texture matching this adapter, fill it, then
+    // release key 1 to its D3D11 owner. The consumer owns the NT handle.
+    virtual bool write_d3d11_display(Buffer*, uint32_t, uint32_t, void*,
+                                     const void*, BufferRef*, std::string&) { return false; }
+#endif
     // `spk_result_free` gets a result, not an engine, and a texture handed out
     // +1 must be releasable without one.
     static void release_texture_static(void* texture);

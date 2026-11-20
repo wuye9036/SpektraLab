@@ -1,5 +1,6 @@
 #pragma once
 #include "CanvasMath.hpp"
+#include "NativeCanvasFrame.hpp"
 #include "ColorPipeline.hpp"
 #include "PostDevView.hpp"
 #include <QImage>
@@ -36,6 +37,9 @@
 // postDevSourceMap for its cropped previewImage and navigatorImage.
 class FrameCanvas : public QQuickItem {
     Q_OBJECT
+    Q_PROPERTY(QVariant nativeDisplay READ nativeDisplay WRITE setNativeFrame NOTIFY nativeDisplayChanged)
+    Q_PROPERTY(QImage preparedToneGuide READ preparedToneGuide WRITE setPreparedToneGuide NOTIFY toneSourceChanged)
+    Q_PROPERTY(QImage toneSource READ toneSource WRITE setToneSource NOTIFY toneSourceChanged)
     Q_PROPERTY(QImage image READ image WRITE setImage NOTIFY imageChanged)
     Q_PROPERTY(QVariantMap postDev READ postDev WRITE setPostDev NOTIFY postDevChanged)
     Q_PROPERTY(QVariantList sourceMap READ sourceMap WRITE setSourceMap NOTIFY postDevChanged)
@@ -64,7 +68,16 @@ public:
     static constexpr float kGamutWarningColour[3] = {1.0f, 0.0f, 1.0f};
     explicit FrameCanvas(QQuickItem* parent=nullptr);
     QImage image() const { return image_; }
+    QImage toneSource() const { return toneSource_; }
+    QImage preparedToneGuide() const { return preparedGuide_; }
+    void setPreparedToneGuide(const QImage& guide);
+    QVariant nativeDisplay() const { return QVariant::fromValue(native_); }
+    void setNativeFrame(const QVariant& frame);
+    void setToneSource(const QImage& image);
     void setImage(const QImage& image);
+#ifdef Q_OS_WIN
+    void setNativeDisplay(std::shared_ptr<spk::gpu::SharedDisplay> frame, QSize size);
+#endif
     bool fit() const { return view_.fit; }
     void setFit(bool fit);
     double scalePercent() const;
@@ -111,6 +124,8 @@ public:
     // The view, for tests and the harness.
     spk::desktop::canvas::View view() const;
 signals:
+    void toneSourceChanged();
+    void nativeDisplayChanged();
     void imageChanged();
     void viewChanged();
     void interactiveChanged();
@@ -145,7 +160,9 @@ private:
     QMetaObject::Connection pipelineChanged_, frameSwapped_;
     QPointer<FrameCanvas> follow_;
     QMetaObject::Connection followChanged_;
-    QImage image_;
+    QImage image_, toneSource_, preparedGuide_;
+    NativeCanvasFrame native_;
+
     quint64 revision_=0;
     ProofTransformPtr proof_;
     bool gamutWarning_=false;

@@ -13,6 +13,18 @@
 // Exit 77 (CTest: skipped) when no D3D11 device can be created, with a
 // message on stderr; anything else that goes wrong is a failure.
 #include "ColorCanvasNode.hpp"
+#ifdef Q_OS_WIN
+#include "gpu/d3d11_target.hpp"
+#include "PostDevGpu.hpp"
+#include "FrameImage.hpp"
+#include <d3d11.h>
+#include <dxgi1_4.h>
+#include <QFileInfo>
+#include <QThread>
+#include <cstring>
+#include <wrl/client.h>
+#include <rhi/qrhi_platform.h>
+#endif
 #include "ColorLut.hpp"
 #include "ColorPipeline.hpp"
 #include "FrameCanvas.hpp"
@@ -633,6 +645,25 @@ void runProof(Harness& h,bool software,const QString& resources) {
     h.pipeline().setLutOverrideForTesting(std::make_shared<const ColorLut>());
 }
 void run(bool software,const QString& resources) {
+    // A stock edit publishes a downsampled preview, then the full frame.
+    // The short edge rounded to 801 pixels stands for 1602, not exactly 1601.
+    {
+        FrameCanvas canvas;
+        canvas.setSize({600, 400});
+        const QImage full(2400, 1601, QImage::Format_RGB32);
+        QImage preview(1200, 801, QImage::Format_RGB32);
+        preview.setDevicePixelRatio(0.5);
+        canvas.setImage(full);
+        canvas.zoomTo(2);
+        canvas.panBy(211, -137);
+        const auto origin = canvas.imageRect().topLeft();
+        canvas.setImage(preview);
+        check(!canvas.fit() && canvas.scalePercent() == 200 && canvas.imageRect().topLeft() == origin,
+              "stock preview must preserve zoom and pan with a rounded short edge");
+        canvas.setImage(full);
+        check(canvas.scalePercent() == 200 && canvas.imageRect().topLeft() == origin,
+              "full-resolution replacement must preserve zoom and pan");
+    }
     const char* mode=software?"software backend (CPU path)":"D3D11";
     const auto identity=std::make_shared<const ColorLut>();
     const auto swap=makeLut(17,101,[](const Rgb& c){return Rgb{c[1],c[2],c[0]};});
@@ -941,14 +972,162 @@ void benchmark(const QString& resources) {
         }
 }
 
+#ifdef Q_OS_WIN
+// Compare the two publications at the actual scene-graph render target. A
+// black CPU image on the native pass makes an accidental upload fail loudly.
+static void interop(const QString& resources) {
+    using namespace spk;
+    constexpr int w=259,h=173;
+    Harness scene({w,h},false,true);
+    auto* device=static_cast<ID3D11Device*>(static_cast<const QRhiD3D11NativeHandles*>(scene.rhi()->nativeHandles())->dev);
+    std::unique_ptr<spk_engine, decltype(&spk_engine_destroy)> engine(
+        spk_engine_create(resources.toUtf8().constData(),nullptr),spk_engine_destroy);
+    check(bool(engine), "cannot create Vulkan render engine");
+    std::vector<float> rgb(w*h*3);
+    for(int y=0;y<h;++y)for(int x=0;x<w;++x) {
+        auto* p=&rgb[(y*w+x)*3];
+        p[0]=.02f+.8f*x/w;p[1]=.04f+.6f*y/h;p[2]=.03f+.5f*((x+2*y)%w)/w;
+    }
+    const spk_image input{rgb.data(),w,h,3};
+    std::unique_ptr<spk_session,decltype(&spk_session_release)> session(
+        spk_open(engine.get(),&input,R"({"grain_active":false,"glare_active":false})",nullptr),spk_session_release);
+    check(bool(session),spk_last_error(engine.get()));
+    spk_result cpu{};
+    check(spk_render(session.get(),"full",&cpu)==SPK_OK,spk_last_error(engine.get()));
+    const auto ref=desktop::display::halfImage(cpu.rgba16,cpu.width,cpu.height,cpu.row_stride_px,QColorSpace::SRgb);
+    scene.canvas().setImage(ref);
+    const QImage expected=scene.render();
+    QImage black(ref.size(),ref.format());black.fill(Qt::black);black.setColorSpace(ref.colorSpace());
+    scene.canvas().setImage(black);
+    check(scene.render()!=expected,"reference draw unexpectedly black");
+    gpu::D3D11Publication publication;
+    auto& display=publication.texture;
+    spk_result meta{};
+    QImage navigator,guide;
+    std::vector<float> histogram;
+    publication.producer=desktop::postdev::analysisDevice();
+    publication.analyze=[&](ID3D11Texture2D* tex) {
+        desktop::postdev::analyzeDisplay(tex,QColorSpace::SRgb,{111,111},desktop::display::kHistogramSamples,navigator,guide,histogram);
+    };
+    const auto status=gpu::render_d3d11(session.get(),"full",true,publication,meta,true);
+    check(status==SPK_OK,spk_last_error(engine.get()));
+    check(display && !meta.rgba16 && !meta.texture && meta.width==w && meta.height==h,"unexpected host output");
+    check(navigator==desktop::display::downscaled(ref,{111,111}),"shared navigator pixels differ");
+    check(histogram==desktop::display::histogram(ref),"shared histogram differs");
+    check(guide==desktop::postdev::gpuToneGuide(ref,desktop::postdev::ToneSpace::SRgb),"shared tone guide differs");
+    std::string why;
+    check(publication.readPixels && publication.readPixels(meta,why),why);
+    check(meta.row_stride_px==cpu.row_stride_px &&
+          std::memcmp(meta.rgba16,cpu.rgba16,size_t(h)*cpu.row_stride_px*8)==0,"exact export codes differ");
+    publication.readPixels={};
+    spk_result_free(&cpu);spk_result_free(&meta);
+    session.reset();engine.reset();
+    scene.canvas().setNativeDisplay(display,ref.size());
+    const auto shown=scene.render();
+    float maxError=0;
+    size_t unequal=0;
+    for (int y=0;y<h;++y) {
+        const auto* a=reinterpret_cast<const float*>(expected.constScanLine(y));
+        const auto* b=reinterpret_cast<const float*>(shown.constScanLine(y));
+        for (int x=0;x<4*w;++x) if(a[x]!=b[x]) {
+            if(unequal++<3) std::printf("first difference %d,%d c%d %.8g %.8g\n",x/4,y,x%4,a[x],b[x]);
+            maxError=std::max(maxError,std::abs(a[x]-b[x]));
+        }
+    }
+    if(unequal) std::printf("unequal=%zu max=%g\n",unequal,maxError);
+    check(!unequal,"shared image differs from the host path in the FP32 canvas target");
+    scene.canvas().setNativeDisplay({},{});display.reset();
+    check(scene.render()!=expected,"retired native frame still visible");
+    std::printf("PASS native Vulkan reprint -> D3D11 FrameCanvas, %dx%d FP32 target bit identical\n",w,h);
+}
+
+// Repeated real-photo opens exercise driver residency as well as RAII. The
+// window target is small; the sampled print is always the full camera frame.
+static void interopPhotos(const QString& resources,const QStringList& files) {
+    using namespace spk;
+    using Microsoft::WRL::ComPtr;
+    Harness scene({640,480},false);
+    auto* device=static_cast<ID3D11Device*>(static_cast<const QRhiD3D11NativeHandles*>(scene.rhi()->nativeHandles())->dev);
+    ComPtr<IDXGIDevice> dxgi;
+    ComPtr<IDXGIAdapter> adapter;
+    ComPtr<IDXGIAdapter3> adapter3;
+    check(SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&dxgi))) && SUCCEEDED(dxgi->GetAdapter(&adapter)) &&
+          SUCCEEDED(adapter.As(&adapter3)),"no DXGI video memory counters");
+    auto memory=[&] {
+        DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+        check(SUCCEEDED(adapter3->QueryVideoMemoryInfo(0,DXGI_MEMORY_SEGMENT_GROUP_LOCAL,&info)),"query local memory");
+        return info.CurrentUsage/(1024.*1024.);
+    };
+    desktop::HostOptions options;
+    options.output_color_space="ProPhoto RGB";options.bgra8_display=false;
+    QImage nav,guide;std::vector<float> histogram;
+    options.beginDisplay=[&](const desktop::OutputEncoding& encoding) {
+        auto publication=std::make_shared<gpu::D3D11Publication>();
+        publication->producer=desktop::postdev::analysisDevice();
+        publication->analyze=[&,space=desktop::display::colorSpace(encoding)](ID3D11Texture2D* texture) {
+            desktop::postdev::analyzeDisplay(texture,space,{1024,1024},desktop::display::kHistogramSamples,nav,guide,histogram);
+        };
+        return publication;
+    };
+    std::weak_ptr<const desktop::Frame> lastFrame;
+    std::weak_ptr<gpu::SharedDisplay> lastDisplay;
+    std::printf("local MiB before host %.1f\n",memory());
+    for (int phase=0;phase<2;++phase) {
+        {
+        desktop::PreviewHost host(resources.toStdWString(),options);
+        desktop::RenderSettings settings;
+        settings.grain_active=false;settings.glare_active=false;
+        for(int round=0;round<(phase==0?3:1);++round) for(const auto& file:files) {
+            auto frame=host.open_raw(file.toStdWString(),desktop::DecodeMode::compatible16,settings);
+            check(frame->display && frame->display->texture && frame->display->readPixels,"host publication fell back");
+            scene.canvas().setImage(nav);
+            QSize size(int(frame->width()),int(frame->height()));
+            scene.canvas().setNativeDisplay(frame->display->texture,size);
+            const auto draw=scene.render();
+            check(lastFrame.expired() && lastDisplay.expired(),"retired full frame still retained after switching photos");
+            lastFrame=frame; lastDisplay=frame->display->texture;
+            check(frame->display->readPixels!=nullptr,"canvas requested host codes");
+            std::printf("round %d %s %dx%d local %.1f MiB\n",round+1,qPrintable(QFileInfo(file).fileName()),
+                        size.width(),size.height(),memory());
+            if(phase==1) {
+                auto ref=desktop::display::frameImage(frame);
+                check(histogram==desktop::display::histogram(ref),"photo histogram differs");
+                check(nav==desktop::display::navigatorImage(ref,1024),"photo navigator differs");
+                check(guide==desktop::postdev::gpuToneGuide(ref,desktop::postdev::ToneSpace::ProPhoto),"photo tone guide differs");
+                scene.canvas().setNativeDisplay({},{});
+                scene.canvas().setImage(ref);
+                check(scene.render()==draw,"photo scene-graph pixels differ");
+            }
+        }
+        scene.canvas().setNativeDisplay({},{});
+        scene.canvas().setImage({});
+        scene.renderOnly();
+    }
+    check(lastFrame.expired() && lastDisplay.expired(),"closed host retained a full frame");
+    scene.rhi()->finish();
+    // D3D11 defers destruction. Flush both immediate contexts before querying
+    // residency. The production path does not force a flush on each switch.
+    for (auto* d : {device,desktop::postdev::analysisDevice()}) {
+        ComPtr<ID3D11DeviceContext> context;
+        d->GetImmediateContext(&context);
+        context->Flush();
+    }
+    QThread::msleep(250);
+    std::printf("local MiB after %s %.1f\n",phase==0?"GPU-only opens":"host comparison",memory());
+    }
+}
+#endif
+
 int main(int argc,char** argv) {
     // [--software | --hardware] [--benchmark] <engine resources>
-    bool software=false,bench=false;QString resources;
+    bool software=false,bench=false,native=false;QString resources;QStringList photos;
     for(int i=1;i<argc;++i) {
         const QByteArray arg(argv[i]);
         if(arg=="--software")software=true;
         else if(arg=="--hardware")preferWarp=false;
         else if(arg=="--benchmark")bench=true;
+        else if(arg=="--photo" && i+1<argc) photos.append(QString::fromLocal8Bit(argv[++i]));
+        else if(arg=="--interop"){native=true;preferWarp=false;}
         else resources=QString::fromLocal8Bit(arg);
     }
     if(resources.isEmpty()){std::fprintf(stderr,"usage: spk_qt_color_canvas_test [--software|--hardware] <resources>\n");return 2;}
@@ -963,6 +1142,9 @@ int main(int argc,char** argv) {
     QQuickWindow::setGraphicsApi(software?QSGRendererInterface::Software:QSGRendererInterface::Direct3D11);
     QGuiApplication app(argc,argv);
     try {
+#ifdef Q_OS_WIN
+        if(native){interop(resources);if(!photos.isEmpty())interopPhotos(resources,photos);return 0;}
+#endif
         if(bench){benchmark(resources);return 0;}
         run(software,resources);
         std::printf("PASS\n");

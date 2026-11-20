@@ -253,12 +253,13 @@ int main(int argc, char** argv) {
             // With both shifts at zero the scale cannot move the print, so
             // the photograph takes the macOS slider strength.
             auto neutral = version1;
-            mutateSettings(neutral, [](auto& f) { f["y_filter_shift"] = 0; f["m_filter_shift"] = 0; });
+            mutateSettings(neutral, [](auto& f) { f["y_filter_shift"] = 0; f["m_filter_shift"] = 0; f["film_format_mm"] = 35.0; });
             write(path, bytesOf(neutral));
             const auto loaded = store.load(url, catalog);
             check(loaded.state && loaded.state->settings.get("filter_shift_scale") == spk::desktop::SettingValue(40.0) &&
                   loaded.state->settings.get("auto_exposure_method") == spk::desktop::SettingValue(std::string("center_weighted")),
                   "neutral version 1 filters did not take the new scale");
+            check(loaded.state->settings.film_format_mm == 35.0, "a saved 35 mm frame keeps its long edge");
             mutateSettings(neutral, [](auto& f) { f["m_filter_shift"] = 0.01; });
             write(path, bytesOf(neutral));
             check(store.load(url, catalog).state->settings.get("filter_shift_scale") == spk::desktop::SettingValue(1.0),

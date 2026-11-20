@@ -122,7 +122,7 @@ if(NOT APPLE)
             spk_lincomb3 spk_log10_guarded spk_curves
             spk_couplers_correction spk_spectral_epilogue
             spk_print_exposure spk_cam16ucs_compress
-            spk_cctf_encode_matrix spk_to_rgba16
+            spk_cctf_encode_matrix spk_to_rgba16 spk_display_texture
             spk_grain_layers spk_grain_layer_one spk_grain_simple
             spk_lognormal_field spk_rng_probe spk_mul spk_glare_add
             spk_reduce_max spk_boost spk_bw_correct spk_edr spk_cctf_decode
@@ -132,7 +132,7 @@ if(NOT APPLE)
             spk_overscan_canvas spk_overscan_film_present spk_overscan_light
             spk_di_encode spk_scene_latitude
             spk_overscan_add_mask
-            spk_scene_tone_reduce spk_scene_tone
+            spk_scene_tone_reduce spk_scene_tone_filter spk_scene_tone
             CACHE INTERNAL "")
         set(vulkan_spirv)
         file(GLOB vulkan_includes "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/vulkan/*.glsl")
@@ -176,6 +176,9 @@ if(NOT APPLE)
             "${CMAKE_CURRENT_SOURCE_DIR}/include"
             "${CMAKE_CURRENT_SOURCE_DIR}/src")
         target_link_libraries(spektralab_engine PUBLIC spektralab_core spk_volk)
+        if(WIN32)
+            target_sources(spektralab_engine PRIVATE src/gpu/d3d11_target.cpp)
+        endif()
         if(NOT WIN32)
             find_package(Threads REQUIRED)
             target_link_libraries(spektralab_engine PUBLIC Threads::Threads)
@@ -277,7 +280,7 @@ if(NOT APPLE)
             # the public C boundary; callers never free DLL allocations themselves.
             set(shared_sources $<TARGET_OBJECTS:spektralab_pipeline> src/gpu/vulkan_gpu.cpp)
             if(WIN32)
-                list(APPEND shared_sources windows_exports.def)
+                list(APPEND shared_sources windows_exports.def src/gpu/d3d11_target.cpp)
             endif()
             add_library(spektralab_engine_shared SHARED ${shared_sources})
             set_target_properties(spektralab_engine_shared PROPERTIES
@@ -313,6 +316,14 @@ if(NOT APPLE)
                 add_test(NAME spk_vulkan_${probe}
                     COMMAND spk_vulkan_${probe} "${vulkan_resource_dir}")
             endforeach()
+
+            if(WIN32)
+                add_executable(spk_vulkan_blur_mixture tests/gpu_vulkan_blur_mixture.cpp)
+                target_include_directories(spk_vulkan_blur_mixture PRIVATE src src/core)
+                target_link_libraries(spk_vulkan_blur_mixture PRIVATE spektralab_engine)
+                add_dependencies(spk_vulkan_blur_mixture spektralab_vulkan_resources)
+                add_test(NAME spk_vulkan_blur_mixture COMMAND spk_vulkan_blur_mixture "${vulkan_resource_dir}")
+            endif()
 
             # The portable imprint raster, CPU only; it reads the staged fonts.
             add_executable(spk_edge_raster tests/edge_raster_test.cpp)

@@ -11,6 +11,9 @@
 //            on the default adapter (by hand; not a CTest).
 //   --bench [width height]   CPU timing (default 7008 x 4672, 32.7 MP).
 #include "PostDev.hpp"
+#ifdef Q_OS_WIN
+#include "PostDevGpu.hpp"
+#endif
 #include <QColorSpace>
 #include <QFile>
 #include <QGuiApplication>
@@ -173,6 +176,7 @@ std::vector<float> macTables(const pd::CurveSet& c) {
 struct Oracle {
     MacUniforms u;
     std::vector<float> tables;
+    double lowPin=0, highPin=1;
 
     static double f(float v) { return double(v); } // a Metal float literal, exactly
     static double saturate(double v) { return std::min(std::max(v, 0.0), 1.0); }
@@ -182,30 +186,82 @@ struct Oracle {
         if (m <= 0.0 || m >= 1.0) m = 0.5;
         return (l <= m) ? 0.5 * l / m : 0.5 + 0.5 * (l - m) / (1.0 - m);
     }
-    D3 tone(D3 c) const {
+    double decode(double v) const {
+        v = std::max(0., v);
+        if (u.midGrey == pd::proPhotoMidGrey) return v < 1. / 32 ? v / 16 : std::pow(v, 1.8);
+        return v <= .04045 ? v / 12.92 : std::pow((v + .055) / 1.055, 2.4);
+    }
+    double encode(double v) const {
+        if (u.midGrey == pd::proPhotoMidGrey) return v < 1. / 512 ? 16 * v : std::pow(v, 1. / 1.8);
+        return v <= .0031308 ? 12.92 * v : 1.055 * std::pow(v, 1. / 2.4) - .055;
+    }
+    double Y(const D3& c) const {
+        if (u.midGrey == pd::proPhotoMidGrey) return .2880402 * c[0] + .7118741 * c[1] + .0000857 * c[2];
+        return luma(c);
+    }
+    D3 linear(D3 c) const {
+        for (auto& v : c)
+            v = decode(v);
+        return c;
+    }
+    static double fade(double x) {
+        x = saturate(x);
+        return x * x * (3 - 2 * x);
+    }
+    D3 bendPrint(D3 c, double k) const {
+        D3 lin = linear(c);
+        double y = Y(lin), target = 1 + (y - 1) / k;
+        if (y <= 1) {
+            auto light = [](double t) { return t <= 216. / 24389 ? 9.032963 * t : 1.16 * std::cbrt(t) - .16; };
+            double m = light(.18), l = light(y), half = l <= m ? m : 1 - m;
+            double t = (l <= m ? l : 1 - l) / half, arc = half * t / (k + (1 - k) * t);
+            l = l <= m ? arc : 1 - arc;
+            target = l <= .08 ? l / 9.032963 : std::pow((l + .16) / 1.16, 3);
+        }
+        double ceiling = std::max({1., target, *std::max_element(lin.begin(), lin.end())});
+        for (auto& v : lin)
+            v *= target / std::max(y, 1e-12);
+        double peak = *std::max_element(lin.begin(), lin.end());
+        double sat = peak > ceiling ? (ceiling - target) / (peak - target) : 1;
+        for (int i = 0; i < 3; ++i)
+            c[i] = encode(std::max(0., target + (lin[i] - target) * sat));
+        return c;
+    }
+    D3 tone(D3 c, double base) const {
+        const double originalY=Y(linear(c));
+        const double originalL=originalY<=216./24389 ? 9.032963*originalY : 1.16*std::cbrt(originalY)-.16;
         const double mg = u.midGrey;
         for (int i = 0; i < 3; ++i) c[i] *= u.wb[i];
         if (u.exposureGain != 1.0f)
             for (auto& v : c) v = std::pow(std::pow(std::max(v, 0.0), f(2.2f)) * u.exposureGain, f(1.0f / 2.2f));
         if (u.contrast != 0.0f) {
-            double k = 1.0 + u.contrast * f(1.2f);
-            for (auto& v : c) v = (v - mg) * k + mg;
+            const double positive = std::max(0.0, double(u.contrast));
+            double k = 1.0 + u.contrast * f(1.2f) + 6.8 * positive * positive;
+            c = bendPrint(c,k);
         }
         if (u.brightness != 0.0f)
             for (auto& v : c) v = std::pow(std::max(v, 0.0), 1.0 / (1.0 + u.brightness * f(0.8f)));
-        double l = tonePosition(luma(c), mg);
-        if (u.shadows != 0.0f) {
-            double w = (1.0 - l);
-            w = w * w;
-            for (auto& v : c) v += u.shadows * 0.25 * w * (1.0 - v);
-        }
-        if (u.highlights != 0.0f) {
-            double w = l * l;
-            for (auto& v : c) v += u.highlights * 0.25 * w * (u.highlights > 0 ? (1.0 - v) : v);
+        if (u.shadows != 0 || u.highlights != 0) {
+            D3 lin = linear(c);
+            double y = Y(lin);
+            double amount = y < .18 ? -u.shadows * fade(-base / 2) : u.highlights * fade(base / 2);
+            if (amount != 0 && y < 1 && originalL > lowPin && originalL < highPin) {
+                constexpr double pivot = .4949610761;
+                const bool dark = originalL < pivot;
+                auto position = [&](double l){return dark ? l / pivot : (1-l)/(1-pivot);};
+                const double x = position(originalL);
+                const double a = position(dark ? lowPin : highPin);
+                const double b = std::min(1.,position(dark ? highPin : lowPin));
+                if (a < x && x < b) {
+                    const double t=(x-a)/(b-a), k=std::exp2(1.5*amount);
+                    const double mapped=a+(b-a)*t/(k+(1-k)*t);
+                    c=bendPrint(c,x*(1-mapped)/(mapped*(1-x)));
+                }
+            }
         }
         for (auto& v : c)
             v = (v - u.blackPoint) / std::max(1.0 - u.blackPoint - u.whitePoint, f(0.05f));
-        l = luma(c);
+        double l = luma(c);
         for (auto& v : c) v = l + (v - l) * u.saturation;
         double ls = saturate(tonePosition(l, mg));
         double wS = (1.0 - ls) * (1.0 - ls);
@@ -225,7 +281,7 @@ struct Oracle {
         int a = std::clamp(int(i0), 0, 255), b = std::clamp(int(i0) + 1, 0, 255);
         return tables[size_t(row * 256 + a)] * (1.0 - w) + tables[size_t(row * 256 + b)] * w;
     }
-    D3 pixel(D3 c, double ux, double uy) const { return u.enabled ? finish(tone(c), ux, uy) : c; }
+    D3 pixel(D3 c, double ux, double uy, double base) const { return u.enabled ? finish(tone(c, base), ux, uy) : c; }
     // What float32 rounding is worth at this pixel: the largest output change
     // when one channel of the tone result moves by 2^-23, one ulp of 1.0 --
     // the absolute scale of float rounding in values that pass through O(1),
@@ -235,16 +291,22 @@ struct Oracle {
     // channel rows by their slopes (an entry can rise 0.2 in 1/255, 51), so
     // neither the Mac's float kernel nor this one can be closer to the double
     // result than about this.
-    double sensitivity(const D3& c, double ux, double uy) const {
+    double sensitivity(const D3& c, double ux, double uy, double base) const {
         if (!u.enabled) return 0;
-        const D3 t = tone(c), r0 = finish(t, ux, uy);
+        const D3 t = tone(c, base), r0 = finish(t, ux, uy);
         double worst = 0;
         for (int k = 0; k < 3; ++k)
             for (double s : {-1.0, 1.0}) {
                 D3 p = t;
                 p[k] += s * 1.1920928955078125e-7;
                 const D3 r = finish(p, ux, uy);
-                for (int j = 0; j < 3; ++j) worst = std::max(worst, std::abs(r[j] - r0[j]));
+                // Near a saturated colour the gamut boundary also amplifies
+                // rounding in the input to the tone transform itself.
+                D3 input = c;
+                input[k] += s * 1.1920928955078125e-7;
+                const D3 fromInput = pixel(input, ux, uy, base);
+                for (int j = 0; j < 3; ++j)
+                    worst = std::max({worst, std::abs(r[j] - r0[j]), std::abs(fromInput[j] - r0[j])});
             }
         return worst;
     }
@@ -443,18 +505,57 @@ struct Reference {
     std::vector<double> sensitivity; // per pixel, Oracle::sensitivity
 };
 
-Reference oracleFrame(const std::vector<float>& rgba, int w, int h, const Oracle& o) {
+Reference oracleFrame(const std::vector<float>& rgba, int w, int h, Oracle o) {
+    // These fixtures fit on the guide grid. Evaluate both window averages
+    // directly, independently of the product's separable prefix sums.
+    std::vector<double> base(size_t(w) * h);
+    if (o.u.shadows || o.u.highlights) {
+        std::vector<int> ordered;
+        for (size_t i=0; i<base.size(); ++i) {
+            const auto y=o.Y(o.linear({rgba[4*i],rgba[4*i+1],rgba[4*i+2]}));
+            const double l=y<=216./24389 ? 9.032963*y : 1.16*std::cbrt(y)-.16;
+            ordered.push_back(int(std::clamp(l,0.,1.)*4095+.5));
+        }
+        std::sort(ordered.begin(),ordered.end());
+        const size_t cut=(ordered.size()-1)/1000;
+        o.lowPin=std::min(1.,(ordered[cut]+.5)/4095);
+        o.highPin=std::max(0.,(ordered[ordered.size()-1-cut]-.5)/4095);
+        std::vector<double> x(base.size()), a(base.size()), b(base.size());
+        for (size_t i = 0; i < x.size(); ++i)
+            x[i] = std::clamp(
+                std::log2(std::max(1e-12, o.Y(o.linear({rgba[4 * i], rgba[4 * i + 1], rgba[4 * i + 2]}))) / .184), -20.,
+                20.);
+        int radius = std::max(1, int(std::round(.03 * std::max(w, h) / .816)));
+        auto window = [&](int cx, int cy, auto sample) {
+            double sum = 0;
+            int n = 0;
+            for (int j = std::max(0, cy - radius); j <= std::min(h - 1, cy + radius); ++j)
+                for (int i = std::max(0, cx - radius); i <= std::min(w - 1, cx + radius); ++i) {
+                    sum += sample(j * w + i);
+                    ++n;
+                }
+            return sum / n;
+        };
+        for (int i = 0; i < w * h; ++i) {
+            double mu = window(i % w, i / w, [&](int j) { return x[j]; });
+            double var = window(i % w, i / w, [&](int j) { return (x[j] - mu) * (x[j] - mu); });
+            a[i] = var / (var + .5);
+            b[i] = (1 - a[i]) * mu;
+        }
+        for (int i = 0; i < w * h; ++i)
+            base[i] = window(i % w, i / w, [&](int j) { return a[j] * x[i] + b[j]; });
+    }
     Reference out{std::vector<double>(rgba.size()), std::vector<double>(size_t(w) * h)};
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x) {
             const size_t i = (size_t(y) * w + x) * 4;
             const D3 in{rgba[i], rgba[i + 1], rgba[i + 2]};
-            const D3 c = o.pixel(in, (x + 0.5) / w, (y + 0.5) / h);
+            const D3 c = o.pixel(in, (x + 0.5) / w, (y + 0.5) / h, base[i / 4]);
             out.rgba[i] = c[0];
             out.rgba[i + 1] = c[1];
             out.rgba[i + 2] = c[2];
             out.rgba[i + 3] = rgba[i + 3];
-            out.sensitivity[i / 4] = o.sensitivity(in, (x + 0.5) / w, (y + 0.5) / h);
+            out.sensitivity[i / 4] = o.sensitivity(in, (x + 0.5) / w, (y + 0.5) / h, base[i / 4]);
         }
     return out;
 }
@@ -756,8 +857,8 @@ void testOracle() {
         const auto mac = oracleFrame(frame, frameW, frameH, oracle(c.params, c.midGrey));
         const auto result = compare(cpu, mac, oracleTolerance);
         note(table, c.group, result);
-        check(result.pass, "CPU vs Shaders.metal transcription beyond 1/65535 + 16 ulps' conditioning: " + c.group +
-                               " " + c.name + describe(frame, cpu, mac, result.failedAt));
+        check(result.pass, "CPU vs double reference beyond 1/65535 + 16 ulps' conditioning: " + c.group + " " + c.name +
+                               describe(frame, cpu, mac, result.failedAt));
         // Where the grade is well-conditioned the flat bar holds.
         check(result.worstWellConditioned <= oracleTolerance, "flat 1/65535 bar: " + c.group + " " + c.name);
         // And something visibly happened.
@@ -765,9 +866,119 @@ void testOracle() {
             check(maxDifference(cpu, std::vector<double>(frame.begin(), frame.end())) > 1e-3,
                   "the grade moves pixels: " + c.group + " " + c.name);
     }
-    print("CPU vs the double transcription of Shaders.metal (|error|; sensitivity = one float ulp of the tone "
+    print("CPU vs the double Post-Dev reference (|error|; sensitivity = one float ulp of the tone "
           "result, through the grade):",
           table);
+}
+
+void testPrintTone() {
+    pd::Params params;
+    params.contrast = 40;
+    pd::Grade contrast(params);
+    auto gray = [](float value) { return std::array<float, 3>{value, value, value}; };
+    const float mid = std::pow(.18f, 1.f / 1.8f);
+    check(contrast.pixel(gray(0), .5f, .5f) == gray(0) && std::abs(contrast.pixel(gray(1), .5f, .5f)[0] - 1) < 1e-6f &&
+              std::abs(contrast.pixel(gray(mid), .5f, .5f)[0] - mid) < 1e-6f,
+          "contrast holds black, paper white and middle grey");
+    float last = 0;
+    for (int i = 1; i < 1024; ++i) {
+        float x = i / 1024.f, out = contrast.pixel(gray(x), .5f, .5f)[0];
+        check(out > last && out < 1 && (x < mid ? out < x : out > x),
+              "increasing contrast retains both ends of the ramp");
+        last = out;
+    }
+    params = {};
+    params.highlights = -60;
+    params.shadows = 60;
+    pd::Grade ranges(params);
+    const auto space=oracle(params,pd::proPhotoMidGrey);
+    auto encodeL=[&](int l){return float(space.encode(l<=8 ? l/903.2963 : std::pow((l+16)/116.,3)));};
+    std::vector<float> patches;
+    for(int l=0;l<=100;++l) patches.insert(patches.end(),3,encodeL(l));
+    ranges.apply(patches.data(),101,1,3);
+    auto outputL=[&](int l){
+        const double y=space.decode(patches[3*l]);
+        return y<=216./24389 ? 903.2963*y : 116*std::cbrt(y)-16;
+    };
+    check(std::abs(outputL(0))<.001 && std::abs(outputL(100)-100)<.001,"range edits anchor black and paper white");
+    check(outputL(10)-outputL(5)>7.2 && outputL(95)-outputL(90)>7.2,"the anchored curve widens the two tails");
+    for(int i=1;i<=100;++i) check(outputL(i)>outputL(i-1),"range edits preserve grey step ordering");
+
+    // Two isolated hot/dead pixels must not choose either endpoint.
+    QImage print(2001,1,QImage::Format_RGBA32FPx4);
+    float* data=reinterpret_cast<float*>(print.bits());
+    for(int i=0;i<2001;++i) {
+        const int l=i==0?0:i==2000?100:10+(i-1)*81/1999;
+        for(int c=0;c<3;++c) data[4*i+c]=encodeL(l);
+        data[4*i+3]=1;
+    }
+    ranges.prepareToneGuide(print);
+    const float* anchors=reinterpret_cast<const float*>(ranges.toneGuide().constBits());
+    check(std::abs(anchors[2]-.10)<.0004 && std::abs(anchors[3]-.90)<.0004,"whole-print percentile ranks");
+    auto before=print.copy();
+    ranges.apply(print);
+    const auto* src=reinterpret_cast<const float*>(before.constBits());
+    const auto* dst=reinterpret_cast<const float*>(print.constBits());
+    for(int i:{0,1,1999,2000}) check(std::abs(src[4*i]-dst[4*i])<1e-6,"outliers and percentile ends stay pinned");
+    check(dst[400]>src[400] && dst[7600]<src[7600],"the anchored interior still moves");
+}
+
+#ifdef Q_OS_WIN
+void testGradedHistogram() {
+    QImage source(1061,23,QImage::Format_RGBX16FPx4);
+    const auto samples=syntheticFrame(source.width(),source.height(),44);
+    for(int y=0;y<source.height();++y){
+        auto* row=reinterpret_cast<qfloat16*>(source.scanLine(y));
+        for(int x=0;x<source.width()*4;++x)row[x]=qfloat16(samples[y*source.width()*4+x]);
+    }
+    pd::Params p;
+    p.highlights=-60;p.shadows=60;p.vignette={-60,20};
+    pd::Grade grade(p);
+    grade.prepareToneGuide(source);
+    const std::array<float,6> crop{.7f,0,.1f,0,.6f,.25f};
+    auto graded=source;
+    pd::gpuGradeImage(graded,grade,crop);
+    const auto fused=pd::gpuGradedHistogram(source,grade,crop,3);
+    const auto materialized=pd::gpuHistogram(graded,3);
+    check(fused==materialized,"GPU histogram matches the graded half-float image across tiles");
+}
+#endif
+
+// A uniform L* ramp isolates global contrast from hue and exposure. Measure
+// variance about each output's own mean so a brightness offset earns no gain.
+void testContrastVariance() {
+    for (float pivot : {pd::proPhotoMidGrey, pd::srgbMidGrey}) {
+        const auto space = oracle(pd::Params{}, pivot);
+        std::vector<float> ramp;
+        for (int l = 0; l <= 100; ++l) {
+            const double y = l <= 8 ? l * (27.0 / 24389) : std::pow((l + 16.0) / 116, 3);
+            ramp.insert(ramp.end(), 3, float(space.encode(y)));
+        }
+        double previous = 0;
+        for (int setting = -50; setting <= 50; setting += 10) {
+            pd::Params p;
+            p.contrast = setting;
+            auto pixels = ramp;
+            pd::Grade(p, pivot).apply(pixels.data(), 101, 1, 3);
+            double sum = 0, sumSquares = 0;
+            for (int i = 0; i <= 100; ++i) {
+                const double y = space.decode(pixels[3 * i]);
+                const double l = y <= 216.0 / 24389 ? y * (24389.0 / 27) : 116 * std::cbrt(y) - 16;
+                sum += l;
+                sumSquares += l * l;
+            }
+            const double mean = sum / 101;
+            const double variance = sumSquares / 101 - mean * mean;
+            check(variance > previous, "whole-ramp lightness variance increases with the contrast setting");
+            // The population variance of 0, 1, ..., 100 is 850 L* squared.
+            if (setting == 0) check(std::abs(variance - 850) < .001, "neutral contrast preserves ramp variance");
+            if (setting == 40) check(variance > 850 * 1.15, "+40 gives measurable global contrast on the ramp");
+            // A uniform L* ramp gains about 61.7% variance at the calibrated positive endpoint.
+            if (setting == 50) check(variance > 850 * 1.60 && variance < 850 * 1.63,
+                                     "+50 preserves the calibrated whole-ramp contrast");
+            previous = variance;
+        }
+    }
 }
 
 void testDeterminism() {
@@ -775,7 +986,7 @@ void testDeterminism() {
     Random random(9);
     std::vector<float> frame(size_t(w) * h * 4);
     for (auto& v : frame) v = float(random.uniform());
-    const pd::Grade grade(randomParams(random, true));
+    pd::Grade grade(randomParams(random, true));
     const auto reference = cpuFrame(frame, w, h, grade, 1);
     for (int threads : {2, 3, 5, 8, 16, 0}) {
         const auto out = cpuFrame(frame, w, h, grade, threads);
@@ -793,6 +1004,7 @@ void testDeterminism() {
     check(one == many, "RGBA64 bit-identical across thread counts");
     // A tile graded with its own SourceRect is the same pixels as the frame.
     auto tile = std::vector<float>(frame.begin() + size_t(100) * w * 4, frame.begin() + size_t(164) * w * 4);
+    grade.prepareToneGuide(frame.data(), w, h, 4, 0);
     grade.apply(tile.data(), w, 64, 4, 0, 0, {0, 100.0 / h, 1, 64.0 / h});
     double e = 0;
     for (size_t i = 0; i < tile.size(); ++i) e = std::max(e, double(std::abs(tile[i] - reference[size_t(100) * w * 4 + i])));
@@ -826,9 +1038,14 @@ void testImageFormats() {
             reinterpret_cast<QRgb*>(u8.scanLine(y))[x] = qRgb(b[0], b[1], b[2]);
             for (int k = 0; k < 3; ++k) from8[i + k] = b[k] / 255.0f;
         }
-    const auto expected = cpuFrame(frame, frameW, frameH, grade);
-    const auto expected16 = cpuFrame(from16, frameW, frameH, grade);
-    const auto expected8 = cpuFrame(from8, frameW, frameH, grade);
+    // Isolate pixel packing from float rounding in the GPU guide filter.
+    auto reference=[&](const QImage& image,const std::vector<float>& pixels){
+        pd::Grade prepared=grade; prepared.prepareToneGuide(image);
+        return cpuFrame(pixels,frameW,frameH,prepared);
+    };
+    const auto expected=reference(f32,frame);
+    const auto expected16=reference(u16,from16);
+    const auto expected8=reference(u8,from8);
     grade.apply(f32);
     grade.apply(u16);
     grade.apply(u8);
@@ -1047,6 +1264,11 @@ void cpuTests() {
     testCurve();
     testIdentity();
     testOracle();
+    testPrintTone();
+#ifdef Q_OS_WIN
+    testGradedHistogram();
+#endif
+    testContrastVariance();
     testDeterminism();
     testImageFormats();
     testJson();
@@ -1066,10 +1288,11 @@ public:
         check(rhi->isTextureFormatSupported(QRhiTexture::RGBA32F) && rhi->isTextureFormatSupported(QRhiTexture::R32F),
               "float textures");
         src_.reset(rhi->newTexture(QRhiTexture::RGBA32F, QSize(w, h)));
+        guide_.reset(rhi->newTexture(QRhiTexture::RGBA32F, QSize(w, h)));
         curves_.reset(rhi->newTexture(QRhiTexture::R32F, QSize(pd::curveTableSize, 5)));
         dst_.reset(rhi->newTexture(QRhiTexture::RGBA32F, QSize(w, h), 1,
                                    QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
-        check(src_->create() && curves_->create() && dst_->create(), "textures created");
+        check(src_->create() && guide_->create() && curves_->create() && dst_->create(), "textures created");
         rt_.reset(rhi->newTextureRenderTarget({dst_.get()}));
         rp_.reset(rt_->newCompatibleRenderPassDescriptor());
         rt_->setRenderPassDescriptor(rp_.get());
@@ -1080,11 +1303,14 @@ public:
                                        QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge));
         check(sampler_->create(), "sampler created");
         srb_.reset(rhi->newShaderResourceBindings());
-        srb_->setBindings({QRhiShaderResourceBinding::uniformBuffer(0, QRhiShaderResourceBinding::FragmentStage, ubuf_.get()),
-                           QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage,
-                                                                     src_.get(), sampler_.get()),
-                           QRhiShaderResourceBinding::sampledTexture(2, QRhiShaderResourceBinding::FragmentStage,
-                                                                     curves_.get(), sampler_.get())});
+        srb_->setBindings(
+            {QRhiShaderResourceBinding::uniformBuffer(0, QRhiShaderResourceBinding::FragmentStage, ubuf_.get()),
+             QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, src_.get(),
+                                                       sampler_.get()),
+             QRhiShaderResourceBinding::sampledTexture(2, QRhiShaderResourceBinding::FragmentStage, curves_.get(),
+                                                       sampler_.get()),
+             QRhiShaderResourceBinding::sampledTexture(3, QRhiShaderResourceBinding::FragmentStage, guide_.get(),
+                                                       sampler_.get())});
         check(srb_->create(), "bindings created");
         pipeline_.reset(rhi->newGraphicsPipeline());
         pipeline_->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
@@ -1105,6 +1331,9 @@ public:
                                                              frame_.data(), quint32(frame_.size() * sizeof(float))))));
             uploaded_ = true;
         }
+        auto prepared = grade;
+        prepared.prepareToneGuide(frame_.data(), w_, h_, 4, 0);
+        if (!prepared.toneGuide().isNull()) updates->uploadTexture(guide_.get(), prepared.toneGuide());
         tables_ = grade.tables();
         updates->uploadTexture(curves_.get(), QRhiTextureUploadDescription(QRhiTextureUploadEntry(
                                                   0, 0, QRhiTextureSubresourceUploadDescription(
@@ -1137,7 +1366,7 @@ private:
     pd::CurveTables tables_{};
     std::array<float, 44> uniforms_{};
     bool uploaded_ = false;
-    std::unique_ptr<QRhiTexture> src_, curves_, dst_;
+    std::unique_ptr<QRhiTexture> src_, curves_, guide_, dst_;
     std::unique_ptr<QRhiTextureRenderTarget> rt_;
     std::unique_ptr<QRhiRenderPassDescriptor> rp_;
     std::unique_ptr<QRhiBuffer> ubuf_;
@@ -1177,11 +1406,11 @@ void gpuTests(bool preferSoftware) {
         check(vsCpu.pass, "GPU vs CPU beyond 1e-4 + 16 ulps' conditioning: " + c.group + " " + c.name +
                               describe(frame, gpu, cpu, vsCpu.failedAt));
         check(vsCpu.worstWellConditioned <= gpuTolerance, "flat 1e-4 bar: " + c.group + " " + c.name);
-        check(vsMac.pass, "GPU vs Shaders.metal transcription: " + c.group + " " + c.name +
-                              describe(frame, gpu, mac, vsMac.failedAt));
+        check(vsMac.pass,
+              "GPU vs double reference: " + c.group + " " + c.name + describe(frame, gpu, mac, vsMac.failedAt));
     }
     print("GPU vs the CPU path (|error|):", againstCpu);
-    print("GPU vs the double transcription of Shaders.metal (|error|):", againstMac);
+    print("GPU vs the double Post-Dev reference (|error|):", againstMac);
     std::printf("  GPU: %zu grades rendered\n", cases().size());
 }
 

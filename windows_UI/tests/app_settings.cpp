@@ -67,6 +67,17 @@ int main(int argc,char** argv) {
               "the default is not beside the Edits folder");
         check(!userFile.startsWith(scratch),"the default path is inside the scratch tree");
 
+        {
+            const QString previewPath=QDir(scratch).filePath("preview-settings.json");
+            AppSettings settings(previewPath);
+            check(settings.previewLongEdge()==1280,"default preview size");
+            settings.setValue("rendering.previewLongEdge",960);
+            settings.flush();
+            check(AppSettings(previewPath).previewLongEdge()==960,"custom preview size after restart");
+            settings.setValue("rendering.previewLongEdge",9000);
+            check(settings.previewLongEdge()==8192,"preview size obeys the engine limit");
+        }
+
         // A round trip of every type a page stores, through a new instance.
         const QString path=QDir(editStore).filePath(AppSettings::kFileName);
         {

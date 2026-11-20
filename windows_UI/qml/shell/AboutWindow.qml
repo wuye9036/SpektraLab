@@ -61,14 +61,14 @@ ShellWindow {
         Text {
             text: credit.heading
             color: Theme.text
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightTitle
+            font: Theme.forText(Theme.sectionFont, text)
         }
         Text {
             Layout.fillWidth: true
             text: credit.line
             wrapMode: Text.WordWrap
             color: Theme.secondaryText
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+            font: Theme.forText(Theme.captionFont, text)
         }
         LinkText {
             visible: credit.url.length > 0
@@ -113,19 +113,19 @@ ShellWindow {
                     Text {
                         text: L10n.tr("app.name")
                         color: Theme.text
-                        font.family: Theme.fontFamily; font.pixelSize: 22; font.weight: Theme.weightTitle
+                        font: Theme.forText(Theme.aboutTitleFont, text)
                     }
                     Text {
                         text: L10n.tr("about.version", [AppInfo.version])
                         color: Theme.secondaryText
-                        font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                        font: Theme.forText(Theme.valueFont, text)
                     }
                     Text {
                         Layout.fillWidth: true
                         text: L10n.tr("about.tagline")
                         wrapMode: Text.WordWrap
                         color: Theme.dim
-                        font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                        font: Theme.forText(Theme.valueFont, text)
                     }
                 }
             }
@@ -178,7 +178,7 @@ ShellWindow {
                     Layout.bottomMargin: 4
                     text: L10n.tr("about.licences")
                     color: Theme.text
-                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightTitle
+                    font: Theme.forText(Theme.sectionFont, text)
                 }
                 Repeater {
                     model: about.licences
@@ -197,7 +197,7 @@ ShellWindow {
                                 : L10n.tr("about.licenceAbsent", [about.licenceTitle(licenceRow.modelData.file)])
                             elide: Text.ElideRight
                             color: licenceRow.modelData.present ? Theme.text : Theme.warning
-                            font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                            font: Theme.forText(Theme.valueFont, text)
                         }
                         Text {
                             id: chevron

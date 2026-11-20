@@ -15,25 +15,21 @@
 //   * Grade::apply   -- the CPU path, float32 like the GPU, threaded by rows;
 //   * shaders/postdev.glsl -- `vec3 postdev(...)` for the canvas's fragment
 //     shader, fed by std140() and curveTables() below;
-//   * the test's double-precision transcription of Shaders.metal, the oracle.
+//   * the independent double-precision reference in tests/postdev.cpp.
 //
 // ---------------------------------------------------------------------------
 // Integration (who calls what)
 //
-// Colour (AGENTS.md trap 27). Layer 2 grades *encoded* working-space values,
-// as a scan is adjusted after the fact (Shaders.metal:4-17). On the Mac that
-// is ProPhoto RGB, ROMM gamma 1.8 (RFC-018). The only encoding-dependent
-// number is the tone pivot `midGrey` -- the encoded value of linear 0.18 --
-// so pass proPhotoMidGrey for a ProPhoto frame and srgbMidGrey for an sRGB
-// one (midGreyFor() reads it off a QColorSpace and refuses anything else,
-// linear data in particular). Only a ProPhoto frame grades like the Mac: the
-// gains, the saturation and the curves act on whatever primaries the values
-// carry. Windows frames are sRGB today (ColorPipeline.hpp:9); grading them is
-// what the desktop/ port does (desktop/src/shared/adjustments.ts:236).
+// Contrast acts on CIE lightness about 18% grey. Highlights and shadows
+// bend the corresponding half of L* using an edge-preserving base from the
+// ungraded print. The 0.1% and 99.9% print lightness quantiles pin the tails. These three
+// controls decode the print transfer curve, adjust linear RGB together, and
+// re-encode before the next control. Share the full source's tone guide
+// between views, thumbnails and tiles so geometry cannot change the mask.
 //
 // Canvas (GPU lane). Include shaders/postdev.glsl in the canvas fragment
 // shader and call, *after* sampling the frame and *before* the display LUT:
-//     rgb = postdev(rgb, sourceUv, grade, postdevCurves);
+//     rgb = postdev(rgb, sourceUv, grade, postdevCurves, toneGuide);
 // where `rgb` is the sampled frame in its own encoding (not linearised, not
 // display-encoded), `sourceUv` is the sample's position on the *uncropped,
 // unturned* source in [0,1] (the vignette is the print's, before geometry:
@@ -51,9 +47,9 @@
 // SpektrafilmApp.swift:171-173) is `enabled = false`, a stored edit, so it
 // reaches the file as well as the canvas.
 //
-// Export (output lane). Grade the full-resolution frame on the CPU *before*
-// geometry, as Exporter.swift:374-401 does on the GPU: build one Grade from
-// the frame's Params and the frame's mid-grey, call Grade::apply on the
+// Export (output lane). Grade the full-resolution frame on the GPU before
+// geometry. Build one Grade from
+// the frame's Params and mid-grey, then run the shared shader on the
 // uncropped float or RGBA64 frame (row uv = (y+0.5)/H, column (x+0.5)/W),
 // then crop/straighten/turn, resize and convert. Identity params return the
 // pixels untouched, bit for bit, so an ungraded export is the print.
@@ -97,6 +93,7 @@
 // ---------------------------------------------------------------------------
 
 #include <QJsonObject>
+#include <QImage>
 #include <QString>
 #include <QStringList>
 #include <array>
@@ -106,7 +103,6 @@
 #include <vector>
 
 class QColorSpace;
-class QImage;
 
 namespace spk::desktop::postdev {
 
@@ -220,7 +216,9 @@ std::optional<float> midGreyFor(const QColorSpace& space);
 // Layer2Uniforms (Shaders.metal:22-42, Adjustments.swift:97-124), derived in
 // float exactly as Adjustments.uniforms and Layer2Uniforms.tone do
 // (Adjustments.swift:72-94, Mask.swift:301-324).
+enum class ToneSpace { SRgb, ProPhoto, DisplayP3, ProPhotoGamma18 };
 struct Uniforms {
+    ToneSpace toneSpace = ToneSpace::ProPhoto;
     std::array<float, 3> wbGain{1, 1, 1};
     float exposureGain = 1; // 2^stops; the step runs only when != 1
     float exposureScale = 1; // exposureGain^(1/2.2), see Grade
@@ -269,14 +267,22 @@ struct SourceRect {
 class Grade {
 public:
     explicit Grade(const Params& params, float midGrey = proPhotoMidGrey);
+    Grade(const Params& params, float midGrey, const QColorSpace& space);
     Grade(const Uniforms& uniforms, const CurveTables& tables);
 
     bool isIdentity() const { return identity_; }
     const Uniforms& uniforms() const { return u_; }
     const CurveTables& tables() const { return tables_; }
 
+    bool needsToneGuide() const { return !identity_ && (u_.highlights != 0 || u_.shadows != 0); }
+    // Analyse the ungraded whole print. Copies share this implicitly shared grid.
+    void prepareToneGuide(const QImage& source);
+    void prepareToneGuide(const float* data, int width, int height, int channels, std::ptrdiff_t stride);
+    void setPreparedToneGuide(const QImage& guide) { guide_ = guide; }
+    const QImage& toneGuide() const { return guide_; }
+
     // Steps 1-6 (layer2Tone), the part a mask would share.
-    std::array<float, 3> tone(std::array<float, 3> rgb) const;
+    std::array<float, 3> tone(std::array<float, 3> rgb, std::array<float, 4> guide = {1, 0, 0, 1}) const;
     // The whole layer for one pixel at source position (u, v). Identity
     // returns `rgb` unchanged; otherwise the result is clamped to [0,1] as
     // the kernel's final saturate (Shaders.metal:403).
@@ -296,6 +302,7 @@ public:
     void apply(QImage& image, int threads = 0, SourceRect source = {}) const;
 
 private:
+    QImage guide_;
     Uniforms u_;
     CurveTables tables_{};
     bool identity_ = true;
@@ -315,7 +322,7 @@ private:
 //   24-27  cbHighlights  "
 //   28-31  cbLum         luminance: master, shadows, midtones, highlights
 //   32-35  vignette      amount, midpoint, 0, 0
-//   36-39  switches      active, curves active, exposure active, 0 (1 or 0)
+//   36-39  switches      active, curves active, exposure active, ToneSpace
 // "active" is 0 for an identity grade, so the shader returns its input
 // untouched exactly when Grade::apply does.
 inline constexpr std::size_t std140Bytes = 160;

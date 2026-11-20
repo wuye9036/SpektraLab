@@ -75,12 +75,15 @@ void gradePairImage(QImage& image, const desktop::postdev::Params& film,
         pixels[side] = QRect(x0, y0, x1 - x0, y1 - y0);
         saved[side] = image.copy(pixels[side]);
     }
-    if (const auto grade = postdev::gradeFor(film, space)) postdev::gradeImage(image, *grade, {});
+    std::array<std::optional<postdev::Grade>, 2> holeGrades;
+    for (int side=0; side<2; ++side)
+        if (!saved[side].isNull()) holeGrades[side]=postdev::gradeFor(*own[side],space,image);
+    if (const auto grade = postdev::gradeFor(film, space, image)) postdev::gradeImage(image, *grade, {});
     const int bpp = image.depth() / 8;
     for (int side = 0; side < 2; ++side) {
         if (saved[side].isNull()) continue;
         const QRect& p = pixels[side];
-        if (const auto grade = postdev::gradeFor(*own[side], space))
+        if (const auto& grade = holeGrades[side])
             postdev::gradeImage(saved[side], *grade,
                                 {double(p.width()) / W, 0, double(p.x()) / W, 0, double(p.height()) / H, double(p.y()) / H});
         for (int y = 0; y < p.height(); ++y)
@@ -196,7 +199,7 @@ void PreviewController::openPairItem(int index) {
     const auto gen = ++generation_;
     const auto factory = image_factory_;
     const auto grades = pairGrades(item);
-    submit([identity, s, in, mode, gen, index, factory, grades](desktop::PreviewHost& host) {
+    submit([this, identity, s, in, mode, gen, index, factory, grades](desktop::PreviewHost& host) {
         Reply r;
         r.generation = gen;
         r.operation = "open";
@@ -659,9 +662,7 @@ void PreviewController::editPair(const std::function<void(pairs::Pair&, desktop:
     item.pending_save = true;
     item.thumbnail = {};
     loadSettings(pairShown(), item.mode);
-    ++settings_revision_;
-    auto_apply_.stop();
-    schedulePreview();
+    settingsEdited();
     scheduleSave();
     failed_ = false;
     status_ = uiText("status.updatingPreview");
@@ -932,7 +933,7 @@ PreviewController::Visible PreviewController::gradedPair(const QImage& full, con
         if (v.image.isNull()) throw std::runtime_error("Cannot allocate the graded pair");
         gradePairImage(v.image, grades.film, grades.own, holes, v.image.colorSpace());
     }
-    v.navigator = desktop::display::navigatorImage(v.image);
+    v.navigator = desktop::display::navigatorImage(v.image,previewImageEdge());
     v.histogram = desktop::display::histogram(v.image);
     return v;
 }
@@ -1007,7 +1008,7 @@ void PreviewController::regradePair() {
     const auto full = full_image_;
     const auto holes = frame_->pair_holes;
     const void* graded = frame_.get();
-    requestVisible([full, grades, holes] { return gradedPair(full, grades, holes); },
+    requestVisible([this, full, grades, holes] { return gradedPair(full, grades, holes); },
                    [this, layered, graded](Visible v) {
         pair_grading_for_ = nullptr;
         if (!v.error.isEmpty()) {

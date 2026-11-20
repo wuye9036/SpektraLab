@@ -38,7 +38,13 @@ bool Blur::fir(const Image& img, const double sigmas[3], double truncate, const 
         else { kernels[c].assign(1, 1.0); radii[c] = 0; }
     }
     const size_t R = std::max(radii[0], std::max(radii[1], radii[2]));
-    if (R == 0 && active[0] && active[1] && active[2] && !acc) { out = img; return true; }
+    if (R == 0 && !acc) {
+        // A one-tap kernel preserves the pixel, but the first component of a
+        // mixture still contributes only its channel weights.
+        if (!weight) { out = img; return true; }
+        const double zero[3] = {};
+        return affine(img, weight, zero, out, error);
+    }
 
     std::vector<float> table(3 * (2 * R + 1), 0.0f);
     for (int c = 0; c < 3; ++c) {
@@ -62,7 +68,7 @@ bool Blur::fir(const Image& img, const double sigmas[3], double truncate, const 
     if (!alloc_like(img, out, error)) return false;
     const gpu::BufferRef& dummy = acc ? acc->buf : img.buf;
     const uint32_t meta_v[6] = {img.h, img.w, uint32_t(R), 0, 0, 0};
-    const uint32_t meta_h[6] = {img.h, img.w, uint32_t(R), 1, acc ? 1u : 0u, 0};
+    const uint32_t meta_h[6] = {img.h, img.w, uint32_t(R), 1, acc ? 1u : (weight ? 2u : 0u), 0};
     const size_t n = img.pixels();
     if (!gpu_->dispatch("spk_sep_fir_acc",
                         {gpu::Arg::buf(img.buf), gpu::Arg::buf(w), gpu::Arg::buf(dummy),
@@ -126,7 +132,7 @@ bool Blur::iir(const Image& img, const double sigmas[3], const bool active[3],
     // The first pass is plain and the second carries the mixture's multiply-add,
     // which is also where the fused multiply-add landed in the transposed path.
     const uint32_t meta_h[4] = {img.h, img.w, 0u, 1u};
-    const uint32_t meta_v[4] = {img.h, img.w, acc ? 1u : 0u, 0u};
+    const uint32_t meta_v[4] = {img.h, img.w, acc ? 1u : (weight ? 2u : 0u), 0u};
     if (!gpu_->dispatch("spk_iir_df_acc",
                         {gpu::Arg::buf(img.buf), gpu::Arg::buf(coef_buf), gpu::Arg::buf(act_buf),
                          gpu::Arg::buf(dummy->buf), gpu::Arg::buf(wt_buf),
@@ -195,7 +201,7 @@ bool Blur::gaussian(const Image& img, const double sigma[3], Image& out, std::st
         any_fir |= use_fir[c];
         any_iir |= use_iir[c];
     }
-    if (!acc) {
+    if (!acc && !weight) {
         Image cur = img;
         if (any_fir) {
             Image next;
@@ -218,6 +224,10 @@ bool Blur::gaussian(const Image& img, const double sigma[3], Image& out, std::st
     const double a[3] = {1.0, 1.0, 1.0};
     double b[3];
     broadcast3(weight, b, 1.0);
+    if (!acc) {
+        const double zero[3] = {};
+        return affine(blurred, b, zero, out, error);
+    }
     return lincomb(*acc, blurred, a, b, out, error);
 }
 
@@ -249,11 +259,16 @@ bool Blur::mixture(const Image& img, const std::vector<Component>& components, I
                 const double a[3] = {0.0, 0.0, 0.0};
                 if (!lincomb(img, img, a, comp.weight, acc, error)) return false;
             } else {
+#ifdef _WIN32
+                // The Vulkan final pass can weight its result starting from zero.
+                if (!gaussian(img, comp.sigma, acc, error, truncate, nullptr, comp.weight)) return false;
+#else
                 Image zero;
                 zero.h = img.h; zero.w = img.w; zero.c = img.c;
                 zero.buf = gpu_->alloc_zeroed(img.bytes(), error);
                 if (!zero.buf) return false;
                 if (!gaussian(img, comp.sigma, acc, error, truncate, &zero, comp.weight)) return false;
+#endif
             }
             have_acc = true;
         } else {
@@ -261,10 +276,7 @@ bool Blur::mixture(const Image& img, const std::vector<Component>& components, I
             if (!gaussian(img, comp.sigma, next, error, truncate, &acc, comp.weight)) return false;
             acc = next;
         }
-        // A mixture is where one node holds the most memory: halation's
-        // scatter is four components and each IIR pass needs a transpose, a
-        // result, and a transpose back. Evaluating between components lets the
-        // previous component's scratch be the next one's.
+        // Complete each component before reusing its scratch for the next.
         if (!gpu_->flush(error)) return false;
     }
     if (!have_acc) { error = "blur mixture with no components"; return false; }

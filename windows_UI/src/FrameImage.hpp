@@ -59,8 +59,6 @@ QImage halfImage(const QImage& rgba64, const QColorSpace& space);
 // The whole engine frame: halfImage(frame->pixels(), colorSpace(frame->encoding)).
 QImage frameImage(const FramePtr& frame);
 
-// The navigator's picture: long edge at most this, never the full frame.
-inline constexpr int kNavigatorLongEdge = 1024;
 // The filmstrip's box (as the 8-bit thumbnail was scaled before).
 inline constexpr QSize kThumbnailBox{180, 120};
 
@@ -71,8 +69,8 @@ inline constexpr QSize kThumbnailBox{180, 120};
 // colour space tag is kept. An image already inside `bound` is returned
 // as is (shared, not copied): this never enlarges.
 QImage downscaled(const QImage& image, QSize bound);
-inline QImage navigatorImage(const QImage& visible) {
-    return downscaled(visible, {kNavigatorLongEdge, kNavigatorLongEdge});
+inline QImage navigatorImage(const QImage& visible, int edge) {
+    return downscaled(visible, {edge, edge});
 }
 inline QImage thumbnailImage(const QImage& navigator) { return downscaled(navigator, kThumbnailBox); }
 

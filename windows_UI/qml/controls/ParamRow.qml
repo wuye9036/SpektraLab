@@ -56,7 +56,7 @@ Item {
             verticalAlignment: Text.AlignVCenter
             text: row.label
             color: Theme.secondaryText
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+            font: Theme.forText(Theme.labelFont, text)
         }
         Text {
             y: Theme.rowHeight - 2; height: Theme.subRowHeight
@@ -66,7 +66,7 @@ Item {
             text: row.sublabel
             elide: Text.ElideRight
             color: Theme.dim
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+            font: Theme.forText(Theme.captionFont, text)
         }
         Item {
             id: secondSlot

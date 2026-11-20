@@ -25,7 +25,7 @@ TextField {
     leftPadding: 9; rightPadding: 9; topPadding: 0; bottomPadding: 0
     verticalAlignment: TextInput.AlignVCenter
     horizontalAlignment: numeric ? TextInput.AlignHCenter : TextInput.AlignLeft
-    font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+    font: Theme.forText(Theme.valueFont, text || placeholderText)
     color: Theme.text
     placeholderText: placeholder
     placeholderTextColor: Theme.dim

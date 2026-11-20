@@ -15,8 +15,7 @@ Text {
     signal clicked()
     color: Theme.accent
     opacity: available ? 1 : Theme.disabledOpacity
-    font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
-    font.underline: area.containsMouse && available
+    font: Theme.forText(area.containsMouse && available ? Theme.underlinedCaptionFont : Theme.captionFont, text)
     MouseArea {
         id: area
         anchors.fill: parent

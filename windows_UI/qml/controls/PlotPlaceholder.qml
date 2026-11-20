@@ -20,7 +20,7 @@ Rectangle {
         wrapMode: Text.WordWrap
         text: parent.text
         color: Theme.dim
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+        font: Theme.forText(Theme.captionFont, text)
         style: Text.Outline; styleColor: Theme.plot
     }
 }

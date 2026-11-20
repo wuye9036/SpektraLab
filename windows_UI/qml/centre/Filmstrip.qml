@@ -17,8 +17,8 @@ import SpektraLab.Native 1.0
 // photo has the strong frame, a photo in the selected set (what Sync, Paste
 // and batch export act on) the same frame held back. A plain click opens a
 // photo and selects it alone; Ctrl+click adds or removes a photo without
-// moving the open one, which cannot leave the set (Session.click); the corner
-// box does the same for a pointer that does not know that. Left / Right and
+// moving the open one. Shift selects the range from the open photo, and
+// Ctrl+Shift adds that range to the selection. Left / Right and
 // the chevrons step. Dragging a thumbnail along the strip moves it -- the
 // cell it is over gives way as it goes -- and the order is kept for the
 // folder when it is let go (FrameOrder.swift).
@@ -57,7 +57,7 @@ Rectangle {
                 text: L10n.tr("strip.count", [preview.libraryCount, preview.selectedCount])
                 elide: Text.ElideRight
                 color: Theme.dim
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                font: Theme.forText(Theme.captionFont, text)
             }
             PillButton {
                 text: L10n.tr("strip.selectAll")
@@ -141,7 +141,8 @@ Rectangle {
                 Item {
                     id: frame
                     width: parent.width; height: Theme.thumbHeight
-                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.bottom: filename.top
+                    anchors.bottomMargin: 4
                     Rectangle {
                         anchors.fill: parent
                         visible: thumb.imageRect.width <= 0 || cell.failed
@@ -160,7 +161,7 @@ Rectangle {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 text: cell.failed ? L10n.tr("strip.unreadable") : L10n.tr("strip.clickToPreview")
                                 color: cell.failed ? Theme.warning : Theme.dim
-                                font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                                font: Theme.forText(Theme.captionFont, text)
                             }
                         }
                     }
@@ -188,6 +189,17 @@ Rectangle {
                         opacity: cell.open ? 1 : 0.5
                     }
                 }
+                Text {
+                    id: filename
+                    anchors.left: parent.left; anchors.right: parent.right
+                    anchors.bottom: parent.bottom; anchors.bottomMargin: hbar.height + 1
+                    text: cell.modelData.name || ""
+                    textFormat: Text.PlainText
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideMiddle
+                    color: cell.open ? Theme.text : Theme.dim
+                    font: Theme.forText(Theme.filenameFont, text)
+                }
                 MouseArea {
                     id: cellMouse
                     anchors.fill: parent
@@ -201,6 +213,7 @@ Rectangle {
                     property bool dragging: false
                     property bool dragged: false
                     onPressed: function(mouse) {
+                        filmstrip.forceActiveFocus(Qt.MouseFocusReason)
                         dragged = false
                         if (mouse.button !== Qt.LeftButton) return
                         pressX = mouse.x; dragging = false
@@ -227,18 +240,10 @@ Rectangle {
                         if (dragged) return
                         if (mouse.button === Qt.RightButton) { cellMenu.popup(); return }
                         const command = (mouse.modifiers & Qt.ControlModifier) !== 0
-                        if (!command) strip.editor.cropMode = false
-                        preview.clickPhoto(cell.index, command)
+                        const shift = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                        if (!command && !shift) strip.editor.cropMode = false
+                        preview.clickPhoto(cell.index, command, shift)
                     }
-                }
-                SquareCheck {
-                    anchors.right: frame.right; anchors.top: frame.top
-                    anchors.margins: -2
-                    visible: (cell.picked || cellMouse.containsMouse) && strip.dragIndex < 0
-                    checked: cell.picked
-                    available: strip.editor.canBrowse && !(cell.open && cell.picked)
-                    toolTip: L10n.tr("strip.selectHelp")
-                    onToggledTo: function(on) { if (on !== cell.picked) preview.clickPhoto(cell.index, true) }
                 }
                 ToolTip.visible: cellMouse.containsMouse && strip.dragIndex < 0
                 ToolTip.text: cell.failed ? cell.modelData.name + "\n" + cell.modelData.error : (cell.modelData.name || "")
@@ -300,6 +305,6 @@ Rectangle {
         visible: preview.libraryCount === 0
         text: L10n.tr("strip.empty")
         color: Theme.dim
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+        font: Theme.forText(Theme.labelFont, text)
     }
 }

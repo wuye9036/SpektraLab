@@ -1,0 +1,32 @@
+#version 450
+// Two separable box filters on the grid. The first filters the first and
+// second moments to obtain (a,b); the second filters those coefficients.
+layout(local_size_x=256) in;
+layout(set=0,binding=0,std430) readonly buffer Input { float value[]; } src;
+layout(set=0,binding=1,std430) readonly buffer Meta { uint w,h,radius,pass; } m;
+layout(set=0,binding=2,std430) writeonly buffer Output { vec2 value[]; } dst;
+
+void main() {
+    uint i=gl_GlobalInvocationID.x+gl_WorkGroupID.y*gl_NumWorkGroups.x*256u;
+    if(i>=m.w*m.h) return;
+    bool horizontal=(m.pass&1u)==0;
+    uint axis=horizontal?i%m.w:i/m.w;
+    uint length=horizontal?m.w:m.h;
+    uint lo=axis-min(axis,m.radius), hi=min(axis+m.radius,length-1);
+    uint stepSize=horizontal?1u:m.w;
+    vec2 sum=vec2(0);
+    for(uint j=lo;j<=hi;++j) {
+        uint cell=i-axis*stepSize+j*stepSize;
+        if(m.pass==0u) {
+            float x=src.value[cell];
+            sum+=vec2(x,x*x);
+        } else sum+=vec2(src.value[2*cell],src.value[2*cell+1]);
+    }
+    vec2 v=sum/float(hi-lo+1);
+    if(m.pass==1u) {
+        float variance=max(0,v.y-v.x*v.x);
+        float a=variance/(variance+.5);
+        v=vec2(a,v.x*(1-a));
+    }
+    dst.value[i]=v;
+}

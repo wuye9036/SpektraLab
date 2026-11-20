@@ -76,7 +76,7 @@ MacSection {
             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
             text: section.format ? section.format.gate : ""
             color: Theme.dim
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+            font: Theme.forText(Theme.captionFont, text)
         }
     }
     // A half frame offers the way into a pair right under its format
@@ -136,7 +136,7 @@ MacSection {
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
                     text: section.editor.cropMode ? L10n.tr("filmEdge.framing.active") : L10n.tr("filmEdge.framing.inGate")
-                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+                    font: Theme.forText(Theme.labelFont, text)
                     color: section.editor.cropMode ? Theme.accent : Theme.secondaryText
                 }
             }
@@ -202,7 +202,7 @@ MacSection {
         Layout.topMargin: 6
         text: L10n.tr("filmEdge.gateAndScan")
         color: Theme.dim
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+        font: Theme.forText(Theme.captionFont, text)
         opacity: section.on ? 1 : Theme.disabledOpacity
     }
     ParamRow {
@@ -252,7 +252,7 @@ MacSection {
             anchors.verticalCenter: parent.verticalCenter
             text: L10n.tr("filmEdge.bodyNumber", [Math.round(Number(section.p.overscan_camera_seed))])
             color: Theme.text
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+            font: Theme.forText(Theme.valueFont, text)
         }
         PillButton {
             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
@@ -294,7 +294,7 @@ MacSection {
         Layout.topMargin: 6
         text: L10n.tr("filmEdge.light")
         color: Theme.dim
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+        font: Theme.forText(Theme.captionFont, text)
         opacity: section.on ? 1 : Theme.disabledOpacity
     }
     ScrubSlider {

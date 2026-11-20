@@ -25,6 +25,7 @@ canvas::View FrameCanvas::view() const {
 // pixel ratio below 1 (PreviewController publish), and is laid out -- zoom,
 // 100 %, pan -- as the full frame it stands for.
 QSize FrameCanvas::logicalSize() const {
+    if (native_.texture) return native_.logicalSize;
     if(image_.isNull())return {};
     const double r=image_.devicePixelRatio();
     if(r<=0||r==1)return image_.size();
@@ -60,24 +61,51 @@ void FrameCanvas::setSourceMap(const QVariantList& value) {
 // revision, and with it the curve texture already uploaded.
 void FrameCanvas::refreshGrade() {
     const auto space=image_.colorSpace().isValid()?image_.colorSpace():QColorSpace(QColorSpace::SRgb);
-    const auto next=spk::desktop::postdev::gradeFor(params_,space);
+    const auto next=spk::desktop::postdev::gradeFor(params_,space,toneSource_.isNull()?image_:toneSource_,preparedGuide_);
     if(!next){grade_.reset();return;}
     namespace postdev=spk::desktop::postdev;
-    if(grade_&&postdev::std140(*grade_)==postdev::std140(*next)&&grade_->tables()==next->tables())return;
+    if(grade_&&postdev::std140(*grade_)==postdev::std140(*next)&&grade_->tables()==next->tables()&&
+       grade_->toneGuide().cacheKey()==next->toneGuide().cacheKey())return;
     grade_=std::make_shared<const spk::desktop::postdev::Grade>(*next);++grade_revision_;
 }
+void FrameCanvas::setPreparedToneGuide(const QImage& guide) {
+    if (preparedGuide_.cacheKey()==guide.cacheKey()) return;
+    preparedGuide_=guide;
+    if (params_.highlights!=0 || params_.shadows!=0) { refreshGrade(); update(); }
+    emit toneSourceChanged();
+}
+void FrameCanvas::setToneSource(const QImage& image) {
+    if (toneSource_.cacheKey()==image.cacheKey()) return;
+    toneSource_=image;
+    if (params_.highlights!=0 || params_.shadows!=0) { refreshGrade(); update(); }
+    emit toneSourceChanged();
+}
+void FrameCanvas::setNativeFrame(const QVariant& value) {
+    auto next=value.value<NativeCanvasFrame>();
+    if(next.texture==native_.texture && next.logicalSize==native_.logicalSize) return;
+    native_=std::move(next);
+    ++revision_;
+    sync();update();emit nativeDisplayChanged();emit viewChanged();
+}
+#ifdef Q_OS_WIN
+void FrameCanvas::setNativeDisplay(std::shared_ptr<spk::gpu::SharedDisplay> frame, QSize size) {
+    setNativeFrame(QVariant::fromValue(NativeCanvasFrame{std::move(frame),size,size,{}}));
+}
+#endif
 void FrameCanvas::setImage(const QImage& image) {
     if(image.cacheKey()==image_.cacheKey())return;
     const QSize before=logicalSize();
+    const bool switchingResolution = !image_.isNull() && !image.isNull()
+        && image_.devicePixelRatio() != image.devicePixelRatio();
     const bool changedSpace=image.colorSpace()!=image_.colorSpace();
     image_=image;++revision_;
-    if(changedSpace)refreshGrade();
+    if(changedSpace || (toneSource_.isNull() && (params_.highlights!=0 || params_.shadows!=0)))refreshGrade();
     sync();
-    // A new size is a new frame (or a new crop): keep the zoom, centred. The
-    // full frame replacing its live one is the same size here (logicalSize),
-    // so the view stays exactly where it was.
+    // Switching between live and full keeps the photo origin. Their logical
+    // extents can differ because the preview was rounded to whole pixels.
+    // sync() already clamps the existing pan to the bounds of the new image.
     const QSize after=logicalSize();
-    if(after!=before&&!view_.fit&&view_.dpr>0) {
+    if(!switchingResolution&&after!=before&&!view_.fit&&view_.dpr>0) {
         const double z=view_.zoom/view_.dpr;
         view_.offset=QPointF((width()-after.width()*z)*0.5,(height()-after.height()*z)*0.5);
         view_=canvas::clamped(view_);
@@ -198,11 +226,14 @@ QSGNode* FrameCanvas::updatePaintNode(QSGNode* old,UpdatePaintNodeData*) {
     const auto colour=paintColour();
     CanvasPaint paint;
     paint.image=image_;paint.revision=revision_;
+#ifdef Q_OS_WIN
+    paint.nativeFrame=native_.texture;paint.nativeSize=native_.size;paint.hostImage=native_.hostImage;
+#endif
     paint.lut=colour.lut;paint.proof=colour.proof;paint.warning=colour.warning;
     paint.dither=pipeline_&&pipeline_->dither();
     // Filtered when reduced, and when a live frame is drawn larger than its
     // pixels (its device pixel ratio below 1).
-    paint.rect=imageRect();paint.smooth=scale()<1.0||image_.devicePixelRatio()<1.0;
+    paint.rect=imageRect();paint.smooth=scale()<1.0||(native_.texture ? native_.size!=native_.logicalSize : image_.devicePixelRatio()<1.0);
     paint.grade=grade_;paint.gradeRevision=grade_revision_;paint.sourceMap=sourceMap_;
     if(!node->update(window(),paint)){delete node;return nullptr;}
     return node;

@@ -17,7 +17,7 @@ Row {
         text: L10n.tr("camera.asShot")
         color: Theme.dim
         opacity: line.available ? 1 : Theme.disabledOpacity
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+        font: Theme.forText(Theme.captionFont, text)
     }
     SquareCheck {
         anchors.verticalCenter: parent.verticalCenter

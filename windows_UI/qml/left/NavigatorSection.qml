@@ -34,6 +34,8 @@ MacSection {
                                                                        : preview.navigatorImage
                 // Graded like the canvas (Post-Dev), each pixel at its place
                 // on the source: the navigator image is the cropped print.
+                preparedToneGuide: preview.preparedToneGuide
+                toneSource: preview.postDevToneSource
                 postDev: section.editor.cropMode && section.editor.canvas ? section.editor.canvas.postDev : preview.canvasPostDev
                 sourceMap: section.editor.cropMode ? [] : preview.postDevSourceMap
                 enabled: false
@@ -57,7 +59,7 @@ MacSection {
                 visible: !preview.hasFrame
                 text: L10n.tr("navigator.empty")
                 color: Theme.dim
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                font: Theme.forText(Theme.valueFont, text)
             }
             MouseArea {
                 anchors.fill: parent
@@ -90,7 +92,7 @@ MacSection {
             anchors.verticalCenter: parent.verticalCenter
             text: preview.hasFrame ? section.editor.scalePercent.toFixed(1) + " %" : ""
             color: Theme.dim
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+            font: Theme.forText(Theme.captionFont, text)
         }
     }
 }

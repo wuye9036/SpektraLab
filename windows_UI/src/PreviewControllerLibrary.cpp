@@ -151,11 +151,16 @@ void PreviewController::cachePicture() {
     const auto& item=library_[std::size_t(active_index_)];
     if(item.pair)return;
     CachedPicture entry;
-    try {entry.image=desktop::display::downscaled(image_,{kPictureEdge,kPictureEdge});}
+    try {entry.image=desktop::display::downscaled(image_,{previewImageEdge(),previewImageEdge()});}
     catch(const std::exception&) {return;}
     // A live frame's scale belongs to the canvas it was made for.
     if(entry.image.devicePixelRatio()!=1)entry.image.setDevicePixelRatio(1);
     entry.postDev=canvasPostDev();entry.sourceMap=postDevSourceMap();
+    if (const auto grade=postdev::gradeFor(canvasGrade(),entry.image.colorSpace(),full_image_,prepared_guide_);
+        grade && grade->needsToneGuide()) {
+        postdev::gradeImage(entry.image,*grade,postdev::shownSourceMap(frame_,geometry_));
+        entry.postDev.clear();
+    }
     entry.settings=item.settings;entry.mode=item.mode;entry.geometry=item.geometry;
     entry.bytes=entry.image.sizeInBytes();entry.stamp=++picture_stamp_;
     const QString key=item.url.toLocalFile().toLower();
@@ -187,11 +192,11 @@ void PreviewController::showPlaceholder(int index) {
         // read off the GUI thread while the decode runs.
         placeholder_=framedPreview(item.preview,item.geometry);
         const QUrl url=item.url;const auto file=path(url);
-        preview_pool_->start([this,url,file]{
+        preview_pool_->start([this,url,file,edge=previewImageEdge()]{
             QImage image;
             try {
                 spkhost::Rgba8 rgba;std::string source,error;
-                if(spkhost::thumbnail(file,2048,rgba,source,error)&&rgba.width&&rgba.height) {
+                if(spkhost::thumbnail(file,edge,rgba,source,error)&&rgba.width&&rgba.height) {
                     QImage bytes(rgba.rgba.data(),int(rgba.width),int(rgba.height),int(rgba.width)*4,QImage::Format_RGBA8888);
                     image=bytes.convertToFormat(QImage::Format_RGBX8888);
                     image.setColorSpace(QColorSpace::SRgb);
@@ -228,7 +233,7 @@ QImage PreviewController::wholeThumbnail() const {
     if(whole_thumb_.isNull()||!frame_)return whole_thumb_;
     // Graded like the strip's other picture (gradedThumbnail), on the whole
     // frame: each pixel at its own place in the uncropped print.
-    const auto grade=postdev::gradeFor(canvasGrade(),whole_thumb_.colorSpace());
+    const auto grade=postdev::gradeFor(canvasGrade(),whole_thumb_.colorSpace(),full_image_,prepared_guide_);
     if(!grade)return whole_thumb_;
     QImage graded=whole_thumb_;
     try {postdev::gradeImage(graded,*grade,postdev::shownSourceMap(frame_,output::Geometry{}));}
@@ -292,8 +297,18 @@ void PreviewController::applyFolderOrder(int from) {
     }
 }
 
-void PreviewController::clickPhoto(int index,bool command) {
+void PreviewController::clickPhoto(int index,bool command,bool shift) {
     if(!ready_||batchExporting()||dialog_open_||index<0||index>=int(library_.size()))return;
+    if(shift && active_index_ >= 0) {
+        const auto [first, last] = std::minmax(active_index_, index);
+        for(int i = 0; i < int(library_.size()); ++i) {
+            auto& item = library_[i];
+            const bool inRange = first <= i && i <= last;
+            item.selected = inRange || (command && item.selected);
+        }
+        emit libraryChanged();
+        return;
+    }
     if(command) {
         // Session.togglePick: one photograph in or out, the canvas unmoved;
         // the open one cannot leave the set (a batch without the frame it

@@ -34,7 +34,7 @@ Rectangle {
                 x: Theme.rowInset; anchors.verticalCenter: parent.verticalCenter
                 text: L10n.tr("rail.parameters")
                 color: Theme.text
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontRail; font.weight: Theme.weightTitle
+                font: Theme.forText(Theme.headingFont, text)
             }
             PillSwitch {
                 anchors.left: railTitle.right; anchors.leftMargin: 10

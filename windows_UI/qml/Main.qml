@@ -27,8 +27,13 @@ ApplicationWindow {
     visible: true
     color: Theme.card
     title: (preview.hasFrame ? preview.fileName + " — " : "") + L10n.tr("app.name")
-    font.family: Theme.fontFamily
-    font.pixelSize: Theme.fontLabel
+    font: Theme.labelFont
+    Binding {
+        id: tooltipFont
+        target: window.contentItem.ToolTip.toolTip
+        property: "font"
+        value: Theme.forText(Theme.captionFont, tooltipFont.target?.text ?? "")
+    }
     palette.window: Theme.card
     palette.windowText: Theme.text
     palette.text: Theme.text

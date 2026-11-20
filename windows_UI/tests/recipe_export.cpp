@@ -578,6 +578,21 @@ int main(int argc, char** argv) {
                       ex.values.at(0xA001)[0] == 0xFFFF && ex.values.at(0xA002)[0] == 97 && ex.values.at(0xA003)[0] == 61,
                       "EXIF fields in " + path);
             }
+            // A recipe's preview limit applies to its page and DI view,
+            // independently of the primary TIFF dimensions.
+            const QImage wide = busyFrame(1000, 100);
+            exporting::WriteOptions limited;
+            limited.preview = true;
+            limited.previewLongEdge = 800;
+            const QString limitedFile = scratch + "/limited-preview.tif";
+            check(exporting::writeImage(wide, "sRGB", native(limitedFile), limited, resources) ==
+                  exporting::Published::written, "write a sized preview page");
+            const auto mainPage = tiffFile(limitedFile);
+            const auto reducedPage = tiffAt(readAll(limitedFile), mainPage.next);
+            check(mainPage.values.at(256)[0] == 1000 && reducedPage.values.at(256)[0] == 800 &&
+                  reducedPage.values.at(257)[0] == 80, "preview size preserves primary TIFF");
+            check(exporting::diViewPreview(wide, resources, 800).size() == QSize(800, 80), "sized DI view");
+
             // The DI: untagged 16-bit, preview page, LUTs copied once.
             const QString diDir = scratch + "/di";
             QDir().mkpath(diDir);
@@ -647,12 +662,24 @@ int main(int argc, char** argv) {
             hook(hooked, spk::desktop::OutputEncoding{"sRGB", true});
             QImage applied = frame.copy();
             postdev::Grade(params, postdev::srgbMidGrey).apply(applied);
-            check(hooked == applied && hooked != frame, "the hook is Grade::apply at sRGB's mid-grey");
+            // Independent CPU arithmetic versus the delivered GPU export shader.
+            auto agrees16=[](const QImage& a,const QImage& b){
+                if(a.size()!=b.size() || a.format()!=b.format())return false;
+                int worst=0;
+                for(int y=0;y<a.height();++y){
+                    auto x=reinterpret_cast<const quint16*>(a.constScanLine(y));
+                    auto z=reinterpret_cast<const quint16*>(b.constScanLine(y));
+                    for(int i=0;i<4*a.width();++i)worst=std::max(worst,std::abs(int(x[i])-int(z[i])));
+                }
+                if(worst>2)std::fprintf(stderr,"CPU/GPU export difference: %d codes\n",worst);
+                return worst<=2;
+            };
+            check(agrees16(hooked,applied) && hooked != frame, "the hook is Grade::apply at sRGB's mid-grey");
             QImage proPhoto = frame.copy();
             hook(proPhoto, spk::desktop::OutputEncoding{"ProPhoto RGB", true});
             QImage proPhotoApplied = frame.copy();
             postdev::Grade(params, postdev::proPhotoMidGrey).apply(proPhotoApplied);
-            check(proPhoto == proPhotoApplied && proPhoto != hooked, "a ProPhoto frame grades about ProPhoto's mid-grey");
+            check(agrees16(proPhoto,proPhotoApplied) && proPhoto != hooked, "a ProPhoto frame grades about ProPhoto's mid-grey");
             bool refused = false;
             try { QImage linear = frame.copy(); hook(linear, spk::desktop::OutputEncoding{"sRGB", false}); }
             catch(const std::exception&) { refused = true; }
@@ -668,7 +695,9 @@ int main(int argc, char** argv) {
                 const QImage exported = output::exportImage(applied, g, {});
                 // Geometry, then each pixel graded at its source position.
                 QImage shown = output::exportImage(frame, g, {});
-                postdev::gradeImage(shown, postdev::Grade(params, postdev::srgbMidGrey), map);
+                postdev::Grade previewGrade(params, postdev::srgbMidGrey);
+                previewGrade.prepareToneGuide(frame);
+                postdev::gradeImage(shown, previewGrade, map);
                 check(shown.size() == exported.size(), "same picture size");
                 for(int y = 0; y < shown.height(); ++y) {
                     const auto* a = reinterpret_cast<const std::uint16_t*>(shown.constScanLine(y));

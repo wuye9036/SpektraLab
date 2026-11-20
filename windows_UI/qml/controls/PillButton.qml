@@ -42,9 +42,7 @@ Item {
         anchors.centerIn: parent
         text: root.text
         color: root.outlined ? (root.active ? Theme.accent : Theme.dim) : Theme.text
-        font.family: Theme.fontFamily
-        font.pixelSize: root.outlined ? Theme.fontAction : Theme.fontSmall
-        font.weight: root.outlined ? Theme.weightTitle : Theme.weightText
+        font: Theme.forText(root.outlined ? Theme.headingFont : Theme.valueFont, text)
     }
     MouseArea {
         id: mouse

@@ -46,10 +46,10 @@ ColumnLayout {
                     y: 1
                     text: editor.title(parent.modelData)
                     fontSizeMode: Text.HorizontalFit
-                    minimumPixelSize: Theme.fontSmall - 2
+                    minimumPixelSize: Theme.valueFont.pixelSize - 2
                     horizontalAlignment: Text.AlignHCenter
                     color: parent.on ? Theme.accent : Theme.secondaryText
-                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                    font: Theme.forText(Theme.valueFont, text)
                 }
                 Rectangle {
                     anchors.bottom: parent.bottom

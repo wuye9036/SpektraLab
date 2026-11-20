@@ -13,9 +13,7 @@ Button {
     padding: 6
     leftPadding: 14; rightPadding: 14
     implicitHeight: 24
-    font.family: Theme.fontFamily
-    font.pixelSize: Theme.fontSmall
-    font.weight: Theme.weightText
+    font: Theme.forText(Theme.valueFont, text)
     hoverEnabled: true
     contentItem: Text {
         text: root.text

@@ -41,7 +41,7 @@ ColumnLayout {
         Layout.alignment: Qt.AlignHCenter
         text: zoneWheel.label
         color: Theme.dim
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+        font: Theme.forText(Theme.captionFont, text)
     }
     Item {
         id: square
@@ -183,6 +183,6 @@ ColumnLayout {
         Layout.alignment: Qt.AlignHCenter
         text: zoneWheel.label
         color: Theme.dim
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+        font: Theme.forText(Theme.captionFont, text)
     }
 }
