@@ -753,6 +753,7 @@ private:
     // Everything the canvases show of one frame, made on the worker.
     struct Publication {
         QImage full, visible, navigator, preparedGuide;
+        std::shared_ptr<const NativeCanvasFrame> nativePrint;
         std::vector<float> histogram, uncropped_histogram;  // of visible, of full
         QImage source;  // a cut frame's undeveloped decode (Frame::source_preview)
         // The whole print, unturned and uncropped, at the strip's size: what
@@ -852,6 +853,7 @@ private:
     int film_index_=0, paper_index_=0, decode_mode_=0;
     double exposure_ev_=0;
     spk::desktop::FramePtr frame_;
+    std::shared_ptr<const NativeCanvasFrame> native_print_;
     QImage image_;
     // The picture cache: each photograph's last developed picture as the
     // canvas showed it, bounded by the preview long edge, with what it was developed

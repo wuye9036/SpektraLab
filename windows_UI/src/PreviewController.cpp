@@ -193,6 +193,9 @@ PreviewController::Publication PreviewController::publish(const ImageFactory& fa
 #ifdef Q_OS_WIN
     if (frame->display) {
         const auto native=std::static_pointer_cast<EditorDisplay>(frame->display);
+        p.nativePrint=std::make_shared<NativeCanvasFrame>(NativeCanvasFrame{native->texture,
+            QSize(int(frame->width()),int(frame->height())),QSize(int(frame->logicalWidth()),int(frame->logicalHeight())),
+            [frame]{return desktop::display::frameImage(frame);}});
         p.navigator=native->navigator;
         p.full=p.navigator;
         p.full.setDevicePixelRatio(double(p.full.width())/frame->logicalWidth());
@@ -318,15 +321,7 @@ QImage PreviewController::uncroppedImageForPrint() const {
     return pixels;
 }
 QVariant PreviewController::nativePrint() const {
-#ifdef Q_OS_WIN
-    if (frame_ && frame_->display) {
-        const auto frame=frame_;
-        return QVariant::fromValue(NativeCanvasFrame{frame->display->texture,
-            QSize(int(frame->width()),int(frame->height())),QSize(int(frame->logicalWidth()),int(frame->logicalHeight())),
-            [frame]{return desktop::display::frameImage(frame);}});
-    }
-#endif
-    return {};
+    return native_print_ ? QVariant::fromValue(NativeCanvasFrameRef(native_print_)) : QVariant{};
 }
 QVariant PreviewController::nativePreview() const {
     return image_.cacheKey()==full_image_.cacheKey() ? nativePrint() : QVariant{};
@@ -551,6 +546,7 @@ void PreviewController::accept(Reply reply) {
             // A picture still being made from the old frame no longer applies.
             retireVisible();
             frame_=std::move(reply.frame);full_image_=std::move(published.full);
+            native_print_=std::move(published.nativePrint);
             prepared_guide_=std::move(published.preparedGuide);
             // A picture cut with an old geometry is never shown: the last
             // picture stays until today's lands (requestGeometryPicture below).
@@ -1026,15 +1022,19 @@ void PreviewController::apply() {
     const auto factory=image_factory_;const auto geometry=geometry_;const auto cut=toCut(geometry);
     const auto drag = drag_id_;
     const bool released = released_revision_ && released_revision_ == revision;
-    const auto tier = live_development_ && !released ? desktop::Tier::live : desktop::Tier::full;
-    submit([this,s,shown,gen,revision,mode,factory,geometry,cut,tier,drag](auto& host){Reply r;r.generation=gen;r.settings_revision=revision;r.drag_id=drag;r.operation="render";r.geometry=geometry;
+    const bool live = live_development_;
+    submit([this,s,shown,gen,revision,mode,factory,geometry,cut,live,released,drag](auto& host){Reply r;r.generation=gen;r.settings_revision=revision;r.drag_id=drag;r.operation="render";r.geometry=geometry;
         try {
             // Publication can fail after a successful worker open (for example,
             // a display allocation failure). Reconcile against the image the
             // user is actually editing before reusing the worker's session.
             const auto active=host.current();
-            r.frame=active&&active->source==shown->source&&active->decode_mode==mode
-                ?host.render(s,cut,tier):host.open_raw(shown->source,mode,s,cut,tier);
+            const bool sameSession=active&&active->source==shown->source&&active->decode_mode==mode;
+            // A RAW white balance opens a replacement session. Publish its live
+            // frame first so the old session retires before full-size development.
+            const bool needsDecode=!sameSession||!desktop::same_decode(active->settings,s);
+            const auto tier=live&&(!released||needsDecode)?desktop::Tier::live:desktop::Tier::full;
+            r.frame=sameSession?host.render(s,cut,tier):host.open_raw(shown->source,mode,s,cut,tier);
             // accept() drops a superseded result unseen; converting 33 MP
             // for it would only delay the render that replaces it.
             if(drag || settings_revision_.load()==revision)r.publication=publish(factory,r.frame,geometry);

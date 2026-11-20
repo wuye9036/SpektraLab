@@ -13,4 +13,7 @@ struct NativeCanvasFrame {
     QSize size, logicalSize;
     std::function<QImage()> hostImage;
 };
-Q_DECLARE_METATYPE(NativeCanvasFrame)
+// QML may retain a previous binding value until its next garbage collection.
+// The controller and the canvas own the publication only while it is current.
+using NativeCanvasFrameRef = std::weak_ptr<const NativeCanvasFrame>;
+Q_DECLARE_METATYPE(NativeCanvasFrameRef)

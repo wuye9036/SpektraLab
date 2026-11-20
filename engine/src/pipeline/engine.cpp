@@ -1263,6 +1263,12 @@ spk_status render_tier(spk_session* session, const char* tier_name, bool use_rep
     if (ok && display && display->texture && std::getenv("SPEKTRAFILM_TRANSFER_TIMINGS"))
         std::fprintf(stderr, "{\"d3d11_display\":true,\"width\":%u,\"height\":%u,\"exact_gpu_bytes\":%zu}\n",
                      rgb.w, rgb.h, retainExact ? size_t(rgb.w)*rgb.h*8 : size_t(0));
+    if (display && !tier->long_edge) {
+        // Publication (or its host fallback) has consumed the float print.
+        // The earlier trim couldn't reclaim it while this Image held it.
+        rgb = {};
+        gpu->trim_pool(0);
+    }
 #endif
     gpu->end_frame();
 

@@ -20,6 +20,8 @@
 #include <d3d11.h>
 #include <dxgi1_4.h>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QThread>
 #include <cstring>
 #include <wrl/client.h>
@@ -1012,6 +1014,10 @@ static void interop(const QString& resources) {
     const auto status=gpu::render_d3d11(session.get(),"full",true,publication,meta,true);
     check(status==SPK_OK,spk_last_error(engine.get()));
     check(display && !meta.rgba16 && !meta.texture && meta.width==w && meta.height==h,"unexpected host output");
+    const auto memory = QJsonDocument::fromJson(spk_memory_report(engine.get())).object();
+    const auto idleBytes = memory.value("pool").toObject().value("free_bytes").toInteger(-1);
+    check(idleBytes >= 0 && idleBytes < qint64(w) * h * 12,
+          "full display publication retained a reusable full-size RGB plane");
     check(navigator==desktop::display::downscaled(ref,{111,111}),"shared navigator pixels differ");
     check(histogram==desktop::display::histogram(ref),"shared histogram differs");
     check(guide==desktop::postdev::gpuToneGuide(ref,desktop::postdev::ToneSpace::SRgb),"shared tone guide differs");
@@ -1036,7 +1042,12 @@ static void interop(const QString& resources) {
     }
     if(unequal) std::printf("unequal=%zu max=%g\n",unequal,maxError);
     check(!unequal,"shared image differs from the host path in the FP32 canvas target");
+    // A QML binding can keep its previous QVariant until the next collection.
+    const auto previousBinding = scene.canvas().nativeDisplay();
+    std::weak_ptr<gpu::SharedDisplay> previousTexture = display;
     scene.canvas().setNativeDisplay({},{});display.reset();
+    check(previousTexture.expired(), "a retired QML value still owns the display texture");
+    scene.canvas().setNativeFrame(previousBinding);
     check(scene.render()!=expected,"retired native frame still visible");
     std::printf("PASS native Vulkan reprint -> D3D11 FrameCanvas, %dx%d FP32 target bit identical\n",w,h);
 }
