@@ -2,6 +2,8 @@
 // the UI uses these same slots. Unit geometry/writer cases live separately.
 #include "PreviewController.hpp"
 #include "FrameOutput.hpp"
+#include "RecipeExport.hpp"
+#include "display_checks.hpp"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QElapsedTimer>
@@ -21,6 +23,12 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>   // CreateHardLinkW: the large folder's frames
+#endif
 
 namespace {
 namespace output=spk::desktop::output;
@@ -50,16 +58,37 @@ void waitFor(const std::function<bool()>& condition,const QString& description) 
     check(condition(),"Timed out waiting for "+description);
 }
 void idle(PreviewController& controller,const QString& description,bool allowFailure=false) {
-    waitFor([&]{return !controller.busy()&&!controller.dirty()&&!controller.batchExporting();},description);
+    waitFor([&]{return !controller.busy()&&!controller.dirty()&&!controller.batchExporting()&&controller.pictureSettled();},description);
     check(allowFailure||!controller.failed(),description+": "+controller.status());
 }
-bool samePixels(const QImage& left,const QImage& right) {
-    if(left.isNull()||right.isNull()||left.size()!=right.size())return false;
-    const auto a=left.convertToFormat(QImage::Format_RGBA8888);
-    const auto b=right.convertToFormat(QImage::Format_RGBA8888);
-    for(int y=0;y<a.height();++y)
-        if(std::memcmp(a.constScanLine(y),b.constScanLine(y),std::size_t(a.width())*4)!=0)return false;
-    return true;
+// Displayed images are half floats: compared exactly, format and tag included.
+using display_checks::sameImage;
+output::Geometry geometryOf(const PreviewController& controller) {
+    return {controller.cropRect(),controller.quarterTurns(),controller.flipHorizontal(),
+            controller.flipVertical(),controller.straightenDegrees()};
+}
+// An 8-bit file against what was on screen, two ways: exactly the export
+// path's quantisation of the engine frame the display came from, and
+// consistent with every displayed half float (display_checks.hpp).
+struct Shown {
+    QImage image;
+    spk::desktop::FramePtr frame;
+    output::Geometry geometry;
+};
+Shown shown(const PreviewController& controller) {
+    return {controller.previewImage().copy(),controller.frame(),geometryOf(controller)};
+}
+qint64 ambiguousSamples=0;
+// The session renders the ProPhoto working space and the legacy export writes
+// sRGB: the file is the shown frame converted once (display_checks::
+// expectedFile with the export's conversion), and the displayed half floats
+// are that same frame's own codes.
+display_checks::ToSrgb toSrgb;
+bool fileShows(const QImage& file,const Shown& expected,const display_checks::ExportDisplayAgreement& agreement) {
+    if(!display_checks::sameRgb8(file,display_checks::expected8(expected.frame,expected.geometry,toSrgb)))return false;
+    const auto result=agreement.compare(display_checks::frame8(expected.frame,expected.geometry),expected.image);
+    ambiguousSamples+=result.ambiguous;
+    return result.samples==qint64(file.width())*file.height()*3&&result.disagreements==0;
 }
 QByteArray fileHash(const QString& path) {
     QFile file(path);check(file.open(QIODevice::ReadOnly),"Cannot read "+path);
@@ -101,6 +130,14 @@ int main(int argc,char** argv) {
         check(QFile::copy(original.absoluteFilePath(),first)&&QFile::copy(original.absoluteFilePath(),second),
               "Cannot make independent fixture copies");
         QJsonArray operations;
+        const display_checks::ExportDisplayAgreement agreement;
+        // The export's own conversion, on an engine of the test's: what the
+        // legacy export does to a ProPhoto frame before the sRGB writers.
+        struct Engine{spk_engine* e;~Engine(){if(e)spk_engine_destroy(e);}} engine{spk_engine_create(args[1].toUtf8().constData(),nullptr)};
+        check(engine.e!=nullptr,"test engine");
+        toSrgb=[e=engine.e](const QImage& rgba64,const spk::desktop::OutputEncoding& from){
+            return spk::desktop::exporting::convert(rgba64,from,"sRGB",e).rgba64;
+        };
         {
             PreviewController controller(resources,nullptr,{},destination+"/edits");
             QObject::connect(&controller,&PreviewController::operationFinished,&controller,
@@ -114,6 +151,9 @@ int main(int argc,char** argv) {
             check(controller.libraryItems().size()==2&&controller.selectedCount()==2,
                   "Multiple-file import did not create two selected items");
             checkCurrent(controller,0,first);
+            // The working space: every 8-bit file below is a conversion.
+            check(controller.frame()->encoding.color_space=="ProPhoto RGB"&&controller.frame()->encoding.cctf_encoding,
+                  "The session does not render encoded ProPhoto RGB");
             check(!controller.previewImage().isNull(),"Imported frame has no preview");
 
             // Leave settings in the 180 ms debounce window, then switch. The
@@ -142,13 +182,18 @@ int main(int argc,char** argv) {
             const auto fullFrame=controller.frame();
             controller.setCropRect(cropA);
             check(controller.frame()==fullFrame&&!controller.busy(),"Crop unnecessarily re-rendered the film");
-            check(samePixels(controller.previewImage(),uncropped.copy(output::cropPixels(uncropped.size(),cropA))),
+            // The cropped picture is made off the GUI thread and lands later.
+            waitFor([&]{return controller.pictureSettled();},"the cropped picture");
+            check(sameImage(controller.previewImage(),uncropped.copy(output::cropPixels(uncropped.size(),cropA))),
                   "Crop preview disagrees with the original frame's pixel rectangle");
+            check(controller.previewImage().format()==QImage::Format_RGBX16FPx4&&
+                  controller.previewImage().colorSpace()==spk::desktop::display::colorSpace(fullFrame->encoding),
+                  "Crop preview is not the frame's half floats in its own colour space");
             const auto cropped=controller.previewImage();
             for(const auto invalid : {QRectF(0,0,0,1),QRectF(-0.1,0,1,1),QRectF(0.8,0,0.5,1),
                                       QRectF(0,0,std::numeric_limits<double>::quiet_NaN(),1)}) {
                 controller.setCropRect(invalid);
-                check(controller.cropRect()==cropA&&samePixels(controller.previewImage(),cropped),
+                check(controller.cropRect()==cropA&&sameImage(controller.previewImage(),cropped),
                       "Invalid crop changed the visible photograph");
             }
             controller.setExposureEv(0.75);
@@ -169,16 +214,16 @@ int main(int argc,char** argv) {
                   "Synchronizing did not copy the source photograph's adjustments");
             check(controller.cropRect()==cropB,"Default synchronization copied crop geometry");
             controller.setExposureEv(-0.5);idle(controller,"independent second-photo brightness");
-            const auto expectedB=controller.previewImage().copy();
+            const auto expectedB=shown(controller);
             controller.selectImage(0);idle(controller,"return to first photograph before export");
             check(controller.exposureEv()==0.75&&controller.cropRect()==cropA,
                   "Editing the second photograph mutated the first photograph");
-            const auto expectedA=controller.previewImage().copy();
+            const auto expectedA=shown(controller);
 
             const QString single=destination+"/displayed.png";
             controller.exportImage(QUrl::fromLocalFile(single),1,95,0);
             idle(controller,"single cropped PNG export");
-            check(samePixels(readImage(single),expectedA),"PNG8 pixels differ from the cropped displayed photograph");
+            check(fileShows(readImage(single),expectedA,agreement),"PNG8 pixels differ from the cropped displayed photograph");
             const auto originalHash=fileHash(single);
             const int beforeRefusal=operations.size();
             controller.exportImage(QUrl::fromLocalFile(single),1,95,0);
@@ -186,7 +231,7 @@ int main(int argc,char** argv) {
             check(operations.size()>beforeRefusal&&!operations.last().toObject().value("success").toBool(),
                   "An existing single export was not refused");
             check(fileHash(single)==originalHash,"Single export changed an existing file");
-            check(samePixels(controller.previewImage(),expectedA),"Failed export changed the displayed frame");
+            check(sameImage(controller.previewImage(),expectedA.image),"Failed export changed the displayed frame");
 
             const QString png16=destination+"/small-16bit.png",jpeg=destination+"/small.jpg";
             controller.exportImage(QUrl::fromLocalFile(png16),2,95,128);
@@ -224,8 +269,8 @@ int main(int argc,char** argv) {
             idle(controller,"batch of two independent photographs");
             check(controller.batchProgress()==2,"Batch did not report both completed photographs");
             const QString firstExport=batch+"/alpha.png",secondExport=batch+"/beta.png";
-            check(samePixels(readImage(firstExport),expectedA),"Batch alpha filename contains the wrong photograph/settings/crop");
-            check(samePixels(readImage(secondExport),expectedB),"Batch beta filename contains the wrong photograph/settings/crop");
+            check(fileShows(readImage(firstExport),expectedA,agreement),"Batch alpha filename contains the wrong photograph/settings/crop");
+            check(fileShows(readImage(secondExport),expectedB,agreement),"Batch beta filename contains the wrong photograph/settings/crop");
             const auto firstHash=fileHash(firstExport),secondHash=fileHash(secondExport);
 
             // Batch's final development left beta in the worker, while the
@@ -238,10 +283,10 @@ int main(int argc,char** argv) {
             check(controller.frame()!=beforeBatchEdit&&controller.exposureEv()==1.0&&
                   controller.frame()->settings.print_exposure==0.5&&controller.cropRect()==cropA,
                   "Post-batch edit did not publish alpha with its requested settings");
-            check(!samePixels(controller.previewImage(),expectedA),"Post-batch brightness edit did not change alpha");
+            check(!sameImage(controller.previewImage(),expectedA.image),"Post-batch brightness edit did not change alpha");
             controller.setExposureEv(0.75);idle(controller,"restore deterministic alpha after batch");
             checkCurrent(controller,0,first);
-            check(samePixels(controller.previewImage(),expectedA),
+            check(sameImage(controller.previewImage(),expectedA.image),
                   "Restoring alpha after batch did not recover its deterministic pixels");
 
             controller.exportBatch(QUrl::fromLocalFile(batch),1,95,0);
@@ -268,7 +313,7 @@ int main(int argc,char** argv) {
             const auto lastSource=sourcePath(controller);
             controller.openRaw(QUrl::fromLocalFile(rejected.absoluteFilePath()));
             idle(controller,"unsupported RAW preserves current photograph",true);
-            check(controller.failed()&&controller.frame()==lastFrame&&samePixels(controller.previewImage(),lastPreview),
+            check(controller.failed()&&controller.frame()==lastFrame&&sameImage(controller.previewImage(),lastPreview),
                   "Failed RAW import replaced the visible photograph");
             checkCurrent(controller,lastIndex,lastSource);
 
@@ -282,11 +327,11 @@ int main(int argc,char** argv) {
             check(QDir().mkpath(mixed),"Cannot create mixed batch directory");
             controller.exportBatch(QUrl::fromLocalFile(mixed),1,95,64);
             idle(controller,"batch containing supported and unsupported RAW files",true);
-            check(controller.failed()&&controller.status().contains(QStringLiteral("失败"))&&
+            check(controller.failed()&&controller.status().contains(QStringLiteral("1 failed"))&&
                   controller.status().contains(rejected.completeBaseName()),
                   "Mixed batch concealed the unsupported RAW failure");
             check(controller.batchProgress()==3,"Mixed batch did not account for every selected file");
-            check(controller.frame()==lastFrame&&samePixels(controller.previewImage(),lastPreview),
+            check(controller.frame()==lastFrame&&sameImage(controller.previewImage(),lastPreview),
                   "Mixed batch failure replaced the editor's displayed photograph");
             checkCurrent(controller,lastIndex,lastSource);
             for(const auto& name : {QStringLiteral("alpha.png"),QStringLiteral("beta.png")}) {
@@ -301,6 +346,66 @@ int main(int argc,char** argv) {
             report.insert("alpha_png_sha256",QString::fromLatin1(firstHash));
             report.insert("beta_png_sha256",QString::fromLatin1(secondHash));
             report.insert("cancelled_files",cancelledFiles.size());
+            report.insert("export_display_ambiguous_samples",double(ambiguousSamples));
+        }
+        // ---- A large folder: 300 photographs (hard links to one fixture, so
+        // no disk is spent). The import call returns quickly, the GUI thread
+        // is never held long while every file's own preview arrives, and the
+        // first photograph opens ----
+        {
+            const QString big=destination+"/big";
+            check(QDir().mkpath(big),"Cannot create the large folder");
+            constexpr int count=300;
+            for(int i=0;i<count;++i) {
+                const QString link=QStringLiteral("%1/frame_%2.%3").arg(big).arg(i,3,10,QChar('0')).arg(original.suffix());
+                const auto target=QDir::toNativeSeparators(first).toStdWString(),name=QDir::toNativeSeparators(link).toStdWString();
+                check(CreateHardLinkW(name.c_str(),target.c_str(),nullptr)!=0,"Cannot hard-link a large-folder frame");
+            }
+            PreviewController controller(resources,nullptr,{},destination+"/big-edits");
+            waitFor([&]{return controller.ready()||controller.failed();},"engine initialization for the large folder");
+            // The longest the event loop goes without running, from a 5 ms
+            // timer's late arrivals.
+            qint64 worstGap=0;QElapsedTimer tick;QTimer probe;probe.setInterval(5);
+            QObject::connect(&probe,&QTimer::timeout,[&]{worstGap=std::max(worstGap,tick.restart());});
+            QElapsedTimer clock;clock.start();
+            controller.openFiles({QUrl::fromLocalFile(big)});
+            const double importMs=double(clock.elapsed());
+            check(controller.libraryCount()==count,"The large folder lists every photograph");
+            tick.start();probe.start();
+            waitFor([&]{return controller.previewsPending()==0&&!controller.busy();},"every preview of the large folder");
+            probe.stop();
+            const double allMs=double(clock.elapsed());
+            int previews=0;
+            for(int i=0;i<count;++i)previews+=!controller.libraryItem(i).value("strip").value<QImage>().isNull();
+            std::cout<<"large folder: "<<count<<" photographs listed in "<<importMs<<" ms, every preview in "<<allMs
+                     <<" ms, longest GUI stall meanwhile "<<worstGap<<" ms\n";
+            report.insert("large_folder_import_ms",importMs);
+            report.insert("large_folder_previews_ms",allMs);
+            report.insert("large_folder_worst_stall_ms",double(worstGap));
+            check(previews==count,"Every photograph of the large folder has its own preview");
+            check(controller.frame()&&controller.activeIndex()==0,"The large folder's first photograph opens");
+            check(importMs<1500,"The large folder is listed without holding the GUI thread");
+            check(worstGap<400,"The GUI thread is never held long while the large folder's previews arrive");
+            // Switching: the next photograph's own preview at once and its
+            // frame after; back to the first, its developed picture at once
+            // (the picture cache) and no decode (the host's decode cache).
+            idle(controller,"the large folder settles");
+            controller.selectImage(1);
+            check(controller.placeholderShown()&&!controller.placeholderImage().isNull()&&!controller.placeholderDeveloped(),
+                  "Switching shows the next photograph's own preview at once");
+            idle(controller,"the second photograph opens");
+            check(!controller.placeholderShown()&&controller.activeIndex()==1,"The placeholder goes when the photograph lands");
+            const double coldDecode=controller.frame()->timings.decode_ms;
+            QElapsedTimer back;back.start();
+            controller.selectImage(0);
+            check(controller.placeholderShown()&&controller.placeholderDeveloped(),"Going back shows its developed picture at once");
+            idle(controller,"back to the first photograph");
+            const double warmDecode=controller.frame()->timings.decode_ms,backMs=double(back.elapsed());
+            std::cout<<"switching: decode "<<coldDecode<<" ms cold, "<<warmDecode<<" ms from the decode cache; back in "
+                     <<backMs<<" ms\n";
+            report.insert("switch_cold_decode_ms",coldDecode);
+            report.insert("switch_warm_decode_ms",warmDecode);
+            check(warmDecode<coldDecode/4,"Going back to a photograph skips its decode");
         }
         report.insert("operations",operations);
         report.insert("status","passed");

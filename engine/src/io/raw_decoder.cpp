@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <exception>
 #include <limits>
 #include <iterator>
@@ -100,6 +102,11 @@ bool capture_source_metadata(const LibRaw& raw, RawMetadata& metadata,
         metadata.black_level_per_channel[c] = static_cast<std::uint32_t>(black);
         metadata.camera_white_level_per_channel[c] = color.linear_max[c];
     }
+    metadata.camera_raw = true;
+    // identify() copies the tag into imgdata.color without its parsed-field
+    // bit; an absent tag keeps LibRaw's -999 sentinel, which the range drops.
+    const float baseline = data.color.dng_levels.baseline_exposure;
+    metadata.baseline_exposure_ev = std::isfinite(baseline) && std::abs(baseline) <= 8.0f ? double(baseline) : 0.0;
     metadata.libraw_version = LibRaw::version();
     metadata.libraw_capabilities = LibRaw::capabilities();
     metadata.make.assign(data.idata.make,
@@ -111,6 +118,9 @@ bool capture_source_metadata(const LibRaw& raw, RawMetadata& metadata,
         sizes.iwidth, sizes.iheight, sizes.top_margin, sizes.left_margin,
         sizes.pixel_aspect};
     metadata.raw_flip = sizes.flip;
+    metadata.colors = data.idata.colors;
+    for (unsigned row = 0; row < 3; ++row)
+        for (unsigned col = 0; col < 3; ++col) metadata.xyz_to_camera[row * 3 + col] = color.cam_xyz[row][col];
     metadata.as_shot_wb_applied = color.as_shot_wb_applied != 0;
     metadata.black = color.black;
     metadata.white_level = color.maximum;
@@ -126,6 +136,70 @@ bool capture_source_metadata(const LibRaw& raw, RawMetadata& metadata,
     metadata.black_pattern.assign(color.cblack + 6,
                                   color.cblack + 6 + static_cast<std::size_t>(pattern_size));
     return true;
+}
+
+// The three EXIF tags LibRaw does not keep: DateTimeOriginal as written (its
+// `timestamp` is that string through mktime, which a time zone can move), and
+// ExposureProgram and ExposureBiasValue, which it does not read at all. Taken
+// from its EXIF parser callback, which is handed every tag of the EXIF IFD
+// with the stream at the tag's value.
+struct ExifTags {
+    std::string date;
+    int program = 0;
+    bool has_bias = false;
+    double bias = 0.0;
+};
+
+std::uint32_t exif_word(const unsigned char* b, int n, unsigned order) {
+    std::uint32_t v = 0;
+    for (int i = 0; i < n; ++i) v |= std::uint32_t(b[order == 0x4D4D ? n - 1 - i : i]) << (8 * i);
+    return v;
+}
+
+void exif_tag(void* context, int tag, int type, int len, unsigned int order, void* stream, INT64) {
+    auto& tags = *static_cast<ExifTags*>(context);
+    auto* in = static_cast<LibRaw_abstract_datastream*>(stream);
+    unsigned char b[32] = {};
+    if (tag == 0x9003 && type == 2 && len >= 10 && tags.date.empty()) {  // DateTimeOriginal
+        const int n = std::min(len, 31);
+        if (in->read(b, 1, n) == n) tags.date.assign(reinterpret_cast<const char*>(b), std::size_t(std::min(n, 19)));
+    } else if (tag == 0x8822 && type == 3 && len >= 1) {               // ExposureProgram
+        if (in->read(b, 1, 2) == 2) tags.program = int(exif_word(b, 2, order));
+    } else if (tag == 0x9204 && type == 10 && len >= 1) {              // ExposureBiasValue
+        if (in->read(b, 1, 8) == 8) {
+            const auto num = std::int32_t(exif_word(b, 4, order)), den = std::int32_t(exif_word(b + 4, 4, order));
+            if (den != 0) { tags.has_bias = true; tags.bias = double(num) / double(den); }
+        }
+    }
+}
+
+// ShootingData.init(exif:) and .day(_:) (Session+FilmEdge.swift:58-79): a
+// date only as "yyyy:MM:dd ...", a value only when positive and finite.
+void capture_shooting_data(const LibRaw& raw, const ExifTags& tags, ShootingData& out) {
+    out = ShootingData{};
+    int y = 0, m = 0, d = 0;
+    if (tags.date.size() >= 10 && std::sscanf(tags.date.c_str(), "%4d:%2d:%2d", &y, &m, &d) == 3 &&
+        y > 1800 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+        out.year = y; out.month = m; out.day = d;
+    } else if (raw.imgdata.other.timestamp > 0) {
+        // A file whose date LibRaw read elsewhere (a maker's own block): its
+        // time_t came from mktime, so localtime gives the written day back.
+        std::tm t{};
+        const std::time_t stamp = raw.imgdata.other.timestamp;
+#ifdef _WIN32
+        if (localtime_s(&t, &stamp) == 0 && t.tm_year + 1900 > 1800)
+#else
+        if (localtime_r(&stamp, &t) && t.tm_year + 1900 > 1800)
+#endif
+        { out.year = t.tm_year + 1900; out.month = t.tm_mon + 1; out.day = t.tm_mday; }
+    }
+    const auto positive = [](double v) { return std::isfinite(v) && v > 0.0 ? v : 0.0; };
+    out.exposure_time = positive(raw.imgdata.other.shutter);
+    out.f_number = positive(raw.imgdata.other.aperture);
+    out.focal_35mm = positive(double(raw.imgdata.lens.FocalLengthIn35mmFormat));
+    out.exposure_program = tags.program;
+    out.has_bias = tags.has_bias && std::isfinite(tags.bias);
+    out.exposure_bias = out.has_bias ? tags.bias : 0.0;
 }
 
 bool supported_headroom_source(LibRaw& raw, std::string& error) {
@@ -238,6 +312,8 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
             raw->imgdata.params.use_camera_wb = 0;
         }
         DecodedRaw decoded;
+        ExifTags exif;
+        raw->set_exifparser_handler(&exif_tag, &exif);
         auto start = Clock::now();
         // filesystem::path::value_type is wchar_t on Windows, selecting
         // LibRaw's Unicode filename overload without an ANSI conversion.
@@ -245,6 +321,7 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
         decoded.timings.open_ms = elapsed_ms(start);
         if (!libraw_ok(open_status, "RAW open", error)) return false;
         if (!supported_compression(*raw, error)) return false;
+        capture_shooting_data(*raw, exif, decoded.metadata.shooting);
 
         start = Clock::now();
         const int unpack_status = raw->unpack();
@@ -307,12 +384,20 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
         decoded.width = image->width;
         decoded.height = image->height;
         decoded.rgb.resize(static_cast<std::size_t>(samples));
+        // Every code's float, once: the same values the per-sample divide
+        // gave, without 100 M double divides on a 36 MP frame.
+        static const std::vector<float> code_to_float = [] {
+            std::vector<float> table(65536);
+            for (std::size_t v = 0; v < table.size(); ++v)
+                table[v] = static_cast<float>(static_cast<double>(v) / 65535.0);
+            return table;
+        }();
         for (std::size_t i = 0; i < decoded.rgb.size(); ++i) {
             std::uint16_t value;
             // LibRaw returns native-endian 16-bit samples. memcpy avoids
             // imposing alignment or aliasing assumptions on its byte array.
             std::memcpy(&value, image->data + i * sizeof(value), sizeof(value));
-            decoded.rgb[i] = static_cast<float>(static_cast<double>(value) / 65535.0);
+            decoded.rgb[i] = code_to_float[value];
         }
         decoded.timings.convert_ms = elapsed_ms(start);
         decoded.timings.total_ms = elapsed_ms(total_start);
@@ -329,6 +414,11 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
 
 bool decode_raw_headroom(const std::filesystem::path& source,
                          DecodedRaw& out, std::string& error) {
+    return decode_raw_headroom(source, nullptr, out, error);
+}
+
+bool decode_raw_headroom(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
+                         DecodedRaw& out, std::string& error) {
     error.clear();
     const auto total_start = Clock::now();
     try {
@@ -341,12 +431,28 @@ bool decode_raw_headroom(const std::filesystem::path& source,
         // LibRaw's Ignore mode prevents WB multipliers above one, but does not
         // reconstruct sensor saturation and still uses uint16 intermediates.
         raw->imgdata.params.highlight = 1;
+        if (user_mul) {
+            // As in the compatible policy; with highlight set, scale_colors()
+            // normalises these by their largest exactly as it does the
+            // as-shot ones, which headroom_exposure_restore requires.
+            for (unsigned c = 0; c < 4; ++c) {
+                if (!std::isfinite((*user_mul)[c]) || (*user_mul)[c] <= 0.0f) {
+                    error = "RAW process: invalid user white-balance multiplier";
+                    return false;
+                }
+                raw->imgdata.params.user_mul[c] = (*user_mul)[c];
+            }
+            raw->imgdata.params.use_camera_wb = 0;
+        }
         DecodedRaw decoded;
+        ExifTags exif;
+        raw->set_exifparser_handler(&exif_tag, &exif);
         auto start = Clock::now();
         const int open_status = raw->open_file(source.c_str());
         decoded.timings.open_ms = elapsed_ms(start);
         if (!libraw_ok(open_status, "RAW open", error)) return false;
         if (!supported_compression(*raw, error)) return false;
+        capture_shooting_data(*raw, exif, decoded.metadata.shooting);
 
         start = Clock::now();
         const int unpack_status = raw->unpack();
@@ -371,7 +477,7 @@ bool decode_raw_headroom(const std::filesystem::path& source,
             return false;
         }
         decoded.metadata.process_warnings = raw->imgdata.process_warnings;
-        if (decoded.metadata.process_warnings & LIBRAW_WARN_BAD_CAMERA_WB) {
+        if (!user_mul && (decoded.metadata.process_warnings & LIBRAW_WARN_BAD_CAMERA_WB)) {
             error = "RAW process: LibRaw rejected camera/as-shot white balance";
             return false;
         }

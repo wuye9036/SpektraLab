@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QRectF>
 #include <filesystem>
+#include <functional>
 
 // Geometry belongs after the engine. Every output surface uses these same
 // pixel edges; cropping never changes the emulsion or re-renders its grain.
@@ -32,10 +33,13 @@ struct Geometry {
 // Invalid input throws std::runtime_error; an empty rectangle is not "full".
 QRect cropPixels(QSize fullSize, QRectF normalizedCrop);
 void validateGeometry(QSize fullSize, const Geometry& geometry);
-QImage displayImage(const QImage& full8, QRectF normalizedCrop);
-QImage displayImage(const QImage& full8, const Geometry& geometry);
+// Geometry on an already published display image (FrameImage.hpp); the
+// result keeps its format and colour space. Crops copy pixels exactly.
+QImage displayImage(const QImage& full, QRectF normalizedCrop);
+QImage displayImage(const QImage& full, const Geometry& geometry);
 // Use this for transformed rendered previews: geometry is applied to the
-// original RGBA16 before quantization, as it is for an 8-bit exported file.
+// original RGBA16 before the display conversion, as it is for an exported
+// file. RGBX16FPx4 tagged with the frame's encoding (display::colorSpace).
 QImage displayFrame(const FramePtr& frame, const Geometry& geometry);
 
 // The source is opaque, already encoded sRGB RGBA64. Processing order is
@@ -48,6 +52,22 @@ QImage exportImage(const QImage& fullRgba64, QRectF normalizedCrop,
 QImage exportImage(const QImage& fullRgba64, const Geometry& geometry,
                    const ExportOptions& options);
 bool formatAvailable(Format format);
+
+// The private folder an export is written in beside its destination, removed
+// with anything left in it when this goes. It takes the folder's inherited
+// permissions: QTemporaryDir asks for owner-only ones, which an SMB share (a
+// NAS) can refuse after the folder is made -- the export failed and left the
+// folder behind. Throws std::runtime_error with the system's reason.
+class StagingDir {
+public:
+    explicit StagingDir(const QString& folder);
+    ~StagingDir();
+    StagingDir(const StagingDir&) = delete;
+    StagingDir& operator=(const StagingDir&) = delete;
+    std::filesystem::path filePath(const QString& name) const;
+private:
+    std::filesystem::path path_;
+};
 
 // Uses the explicitly bundled resources/io/sRGB.icc. Writes a complete file
 // in a private temporary directory beside the destination, then publishes it
@@ -63,11 +83,22 @@ void exportImageFile(const QImage& fullRgba64,
                      const std::filesystem::path& destination,
                      const Geometry& geometry, const ExportOptions& options,
                      const std::filesystem::path& resources);
+// The frame's own RGBA16, never a display image, so a file does not depend on
+// how the canvas is fed. Refuses a frame not encoded in sRGB (the writers
+// embed sRGB.icc) instead of mislabelling it.
 void exportFrame(const FramePtr& frame, const std::filesystem::path& destination,
                  QRectF normalizedCrop, const ExportOptions& options,
                  const std::filesystem::path& resources);
 void exportFrame(const FramePtr& frame, const std::filesystem::path& destination,
                  const Geometry& geometry, const ExportOptions& options,
                  const std::filesystem::path& resources);
+// The same with Post-Dev (postdev::exportGrade): `grade` runs on a private
+// copy of the uncropped RGBA64 frame, in the frame's encoding, before the
+// geometry -- the order of RecipeExport and the Mac's Exporter.filePixels.
+// An empty `grade` is the overload above, byte for byte.
+void exportFrame(const FramePtr& frame, const std::filesystem::path& destination,
+                 const Geometry& geometry, const ExportOptions& options,
+                 const std::filesystem::path& resources,
+                 const std::function<void(QImage&, const OutputEncoding&)>& grade);
 
 } // namespace spk::desktop::output

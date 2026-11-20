@@ -16,6 +16,14 @@
 #include <map>
 #include <stdexcept>
 #include <thread>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <aclapi.h>
+#undef small // rpcndr.h's, which a test variable here is named
+#endif
 
 namespace output=spk::desktop::output;
 namespace fs=std::filesystem;
@@ -105,6 +113,57 @@ void cleanPartials(const QString& folder) {
     const auto entries=QDir(folder).entryList({".spektralab-export-*"},QDir::Dirs|QDir::Hidden|QDir::NoDotAndDotDot);
     check(entries.isEmpty(),"export leaked a partial directory");
 }
+#ifdef _WIN32
+// Whether the folder was given permissions of its own: a protected DACL, or
+// ACEs not inherited from its parent. QTemporaryDir's owner-only security
+// descriptor does both (measured: "D:P" with owner, the local "None" group
+// and Everyone) -- what a Samba share refuses after making the folder, so the
+// export failed and left the folder behind. A plain folder inherits ("D:AI").
+bool ownPermissions(const fs::path& folder) {
+    PACL dacl=nullptr;PSECURITY_DESCRIPTOR descriptor=nullptr;
+    if(GetNamedSecurityInfoW(folder.c_str(),SE_FILE_OBJECT,DACL_SECURITY_INFORMATION,nullptr,nullptr,&dacl,nullptr,&descriptor)!=ERROR_SUCCESS)
+        throw std::runtime_error("cannot read the staging folder's permissions");
+    SECURITY_DESCRIPTOR_CONTROL control=0;DWORD revision=0;
+    bool own=GetSecurityDescriptorControl(descriptor,&control,&revision)&&(control&SE_DACL_PROTECTED);
+    for(DWORD i=0;dacl&&i<dacl->AceCount;++i) {
+        void* ace=nullptr;
+        if(GetAce(dacl,i,&ace)&&!(static_cast<ACE_HEADER*>(ace)->AceFlags&INHERITED_ACE))own=true;
+    }
+    LocalFree(descriptor);
+    return own;
+}
+#endif
+// The staging folder: beside the export, inheriting the folder's permissions,
+// gone with its contents afterwards; a folder it cannot be made in names the
+// folder and the system's reason. Checked in a plain folder of its own: one
+// QTemporaryDir made hands its children Qt's permissions as inherited ones,
+// where the check could not tell the two ways of making a folder apart.
+void verifyStaging() {
+    const QString folder=QDir(QDir::tempPath()).filePath(QStringLiteral("spk-staging-%1").arg(QCoreApplication::applicationPid()));
+    check(QDir().mkdir(folder),"cannot create the staging check's folder");
+    struct Remove{QString path;~Remove(){QDir(path).removeRecursively();}} remove{folder};
+    fs::path made;
+    {
+        const output::StagingDir staging(folder);
+        const auto partial=staging.filePath(QStringLiteral("output.partial"));
+        made=partial.parent_path();
+        check(made.parent_path()==native(QDir::toNativeSeparators(folder))&&
+              QString::fromStdWString(made.filename().wstring()).startsWith(".spektralab-export-"),"staging folder is not beside the export");
+#ifdef _WIN32
+        check(!ownPermissions(made),"staging folder carries permissions of its own");
+#endif
+        QFile file(QString::fromStdWString(partial.wstring()));
+        check(file.open(QIODevice::WriteOnly|QIODevice::NewOnly)&&file.write("x",1)==1,"cannot write in the staging folder");
+    }
+    check(!fs::exists(made),"staging folder outlived the export");
+    const QString missing=QDir(folder).filePath(QStringLiteral("no-such-folder"));
+    try {
+        output::StagingDir staging(missing);
+        throw std::logic_error("staging in a missing folder was accepted");
+    } catch(const std::runtime_error& e) {
+        check(QString::fromUtf8(e.what()).contains(QDir::toNativeSeparators(missing)),"staging failure does not name the folder");
+    }
+}
 QImage expectedOrthogonal(const QImage& cropped,int turns,bool flipX,bool flipY) {
     const bool portrait=turns%2;
     QImage result(portrait?cropped.height():cropped.width(),portrait?cropped.width():cropped.height(),QImage::Format_RGBA64);
@@ -167,6 +226,53 @@ void verifyGeometry(const QImage& original,const QString& folder,const fs::path&
             const auto image=output::exportImage(solid,g,{});
             compare64(image,solid); // includes every edge and opaque alpha
         }
+    }
+
+    // The straighten runs its rows across threads: held bit-identical to the
+    // same bilinear arithmetic on one thread, on a frame tall enough to split
+    // unevenly, and a non-opaque pixel on the last row is still refused.
+    {
+        QImage noise(523,389,QImage::Format_RGBA64);
+        quint32 state=2463534242u;
+        auto next=[&]{state^=state<<13;state^=state>>17;state^=state<<5;return quint16(state);};
+        for(int y=0;y<noise.height();++y) {
+            auto* row=reinterpret_cast<QRgba64*>(noise.scanLine(y));
+            for(int x=0;x<noise.width();++x)row[x]=QRgba64::fromRgba64(next(),next(),next(),65535);
+        }
+        auto serial=[&](double degrees) {
+            const int width=noise.width(),height=noise.height();
+            QImage out(noise.size(),QImage::Format_RGBA64);
+            const double angle=degrees*std::acos(-1.0)/180.0,cosine=std::cos(angle),sine=std::sin(angle);
+            const double zoom=std::max(std::abs(cosine)+std::abs(sine)*height/width,std::abs(cosine)+std::abs(sine)*width/height);
+            const double c=cosine/zoom,s=sine/zoom,centerX=(width-1)*.5,centerY=(height-1)*.5;
+            for(int y=0;y<height;++y) {
+                auto* row=reinterpret_cast<QRgba64*>(out.scanLine(y));
+                for(int x=0;x<width;++x) {
+                    const double sx=std::clamp(centerX+c*(x-centerX)+s*(y-centerY),0.0,double(width-1));
+                    const double sy=std::clamp(centerY-s*(x-centerX)+c*(y-centerY),0.0,double(height-1));
+                    const int x0=int(sx),y0=int(sy),x1=std::min(x0+1,width-1),y1=std::min(y0+1,height-1);
+                    const double fx=sx-x0,fy=sy-y0;
+                    const auto* top=reinterpret_cast<const QRgba64*>(noise.constScanLine(y0));
+                    const auto* bottom=reinterpret_cast<const QRgba64*>(noise.constScanLine(y1));
+                    auto channel=[&](quint16 a,quint16 b,quint16 d,quint16 e) {
+                        return quint16(std::clamp(std::lround((a+(b-a)*fx)*(1-fy)+(d+(e-d)*fx)*fy),0L,65535L));
+                    };
+                    row[x]=QRgba64::fromRgba64(channel(top[x0].red(),top[x1].red(),bottom[x0].red(),bottom[x1].red()),
+                        channel(top[x0].green(),top[x1].green(),bottom[x0].green(),bottom[x1].green()),
+                        channel(top[x0].blue(),top[x1].blue(),bottom[x0].blue(),bottom[x1].blue()),
+                        channel(top[x0].alpha(),top[x1].alpha(),bottom[x0].alpha(),bottom[x1].alpha()));
+                }
+            }
+            return out;
+        };
+        for(const double degrees:{-31.7,-2.3,.4,6.5,44.9}) {
+            output::Geometry g;g.straightenDegrees=degrees;
+            compare64(output::exportImage(noise,g,{}),serial(degrees));
+        }
+        auto holed=noise.copy();
+        reinterpret_cast<QRgba64*>(holed.scanLine(holed.height()-1))[holed.width()-1].setAlpha(65534);
+        output::Geometry g;g.straightenDegrees=6.5;
+        rejects([&]{output::exportImage(holed,g,{});},"export accepted a non-opaque pixel on the last row");
     }
 
     // Combined order: original-space crop, straighten, quarter turn, then
@@ -337,9 +443,10 @@ int main(int argc,char** argv) {
                 else if(format==output::Format::PNG16)compare64(decoded,expected);
             }
         }
+        verifyStaging();
         cleanPartials(folder);
         check(QByteArray(reinterpret_cast<const char*>(original.constBits()),original.sizeInBytes())==originalBytes,"crop/export mutated source pixels");
-        std::printf("PASS crop/geometry-order/quarter-turns/flips/straighten/zoom-fill/16-bit-interpolation/display/PNG8/PNG16/TIFF16/ICC/JPEG/resize/no-overwrite/race/cleanup/extensions/source-immutability\n");
+        std::printf("PASS crop/geometry-order/quarter-turns/flips/straighten/zoom-fill/16-bit-interpolation/display/PNG8/PNG16/TIFF16/ICC/JPEG/resize/no-overwrite/race/cleanup/staging/extensions/source-immutability\n");
         return 0;
     } catch(const std::exception& e) {std::fprintf(stderr,"FAIL %s\n",e.what());return 1;}
 }

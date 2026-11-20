@@ -60,13 +60,13 @@ float cctf_encode_mode(float v, uint32_t mode) {
 }
 
 bool OutputTransform::fetch(spk_engine* engine, const std::string& src, const std::string& dst,
-                            std::string& error) {
+                            std::string& error, const char* gamut_compress_json) {
     src_ = src;
     dst_ = dst;
     char* json = nullptr;
     const float* cmax = nullptr;
     uint32_t count = 0;
-    if (spk_output_transform(engine, src.c_str(), dst.c_str(), nullptr, &json, &cmax, &count) != SPK_OK) {
+    if (spk_output_transform(engine, src.c_str(), dst.c_str(), gamut_compress_json, &json, &cmax, &count) != SPK_OK) {
         error = spk_last_error(engine);
         return false;
     }
@@ -89,6 +89,7 @@ bool OutputTransform::fetch(spk_engine* engine, const std::string& src, const st
     nl_ = uint32_t(g.at("cmax_rows").as_int());
     nh_ = uint32_t(g.at("cmax_cols").as_int());
     cmax_ = cmax;
+    owned_cmax_.clear();
     if (size_t(nl_) * nh_ != count) { error = "output transform: C_max table size mismatch"; return false; }
     // Same space in and out: the engine already compressed into it, so the
     // pixels pass through untouched (only quantisation can change them).
@@ -99,7 +100,7 @@ bool OutputTransform::fetch(spk_engine* engine, const std::string& src, const st
 // `Canvas/Shaders.metal` cam16ucsInto / `shaders/gamut.metal`, line for line.
 static inline void cam16ucs_into(float rgb[3], const std::array<float, 9>& m2x, const std::array<float, 9>& m2r,
                                  const std::array<float, 22>& k, const float* cmax, uint32_t nL, uint32_t nh,
-                                 bool lc_active) {
+                                 bool lc_active, uint8_t* outside = nullptr) {
     using std::pow; using std::fabs; using std::sqrt; using std::log; using std::exp;
     const float F_L = k[0], N_bb = k[1], N_cb = k[2], n_ = k[3], z = k[4], A_w = k[5], c_ = k[6], N_c = k[7];
     const float L_grid0 = k[8], L_grid1 = k[9], h_grid0 = k[10], h_step = k[11];
@@ -176,6 +177,9 @@ static inline void cam16ucs_into(float rgb[3], const std::array<float, 9>& m2x, 
     const float safe = Cmax > 1e-9f ? Cmax : 1e-9f;
 
     float d = Mp / safe;
+    // Before the knee, whose limit is 1: after it every pixel is inside by
+    // construction (Canvas/Shaders.metal: `outside = d > 1.0f`).
+    if (outside) *outside = d > 1.0f ? 1 : 0;
     if (d > threshold) {
         const float sc = limit - threshold;
         const float xk = (d - threshold) / sc;
@@ -265,12 +269,43 @@ void OutputTransform::to_linear(const uint16_t* rgba16, uint32_t w, uint32_t h, 
                 } else {
                     for (int i = 0; i < 3; ++i)
                         lin[i] = matrix_[i * 3] * v[0] + matrix_[i * 3 + 1] * v[1] + matrix_[i * 3 + 2] * v[2];
-                    if (cam16_) cam16ucs_into(lin, m2x_, m2r_, k_, cmax_, nl_, nh_, lightness_);
+                    if (cam16_) cam16ucs_into(lin, m2x_, m2r_, k_, table(), nl_, nh_, lightness_);
                 }
                 out[x * 3] = lin[0]; out[x * 3 + 1] = lin[1]; out[x * 3 + 2] = lin[2];
             }
         }
     });
+}
+
+void OutputTransform::transform_encoded(const float* encoded, size_t count, float* linear, uint8_t* outside) const {
+    for (size_t p = 0; p < count; ++p) {
+        const float v[3] = {cctf_decode_mode(encoded[p * 3], src_mode_), cctf_decode_mode(encoded[p * 3 + 1], src_mode_),
+                            cctf_decode_mode(encoded[p * 3 + 2], src_mode_)};
+        float lin[3] = {v[0], v[1], v[2]};
+        uint8_t out = 0;
+        if (!identity_) {
+            for (int i = 0; i < 3; ++i)
+                lin[i] = matrix_[i * 3] * v[0] + matrix_[i * 3 + 1] * v[1] + matrix_[i * 3 + 2] * v[2];
+            if (cam16_) cam16ucs_into(lin, m2x_, m2r_, k_, table(), nl_, nh_, lightness_, &out);
+        }
+        linear[p * 3] = lin[0]; linear[p * 3 + 1] = lin[1]; linear[p * 3 + 2] = lin[2];
+        if (outside) outside[p] = out;
+    }
+}
+
+OutputTransformParameters OutputTransform::parameters() const {
+    OutputTransformParameters p;
+    p.source_mode = src_mode_; p.target_mode = dst_mode_; p.identity = identity_;
+    p.matrix = matrix_; p.cam16 = cam16_; p.lightness = lightness_;
+    p.m_to_xyz = m2x_; p.m_to_rgb = m2r_; p.k = k_;
+    p.cmax_rows = nl_; p.cmax_cols = nh_; p.cmax = table();
+    return p;
+}
+
+void OutputTransform::own_tables() {
+    if (!cmax_ || !owned_cmax_.empty()) return;
+    owned_cmax_.assign(cmax_, cmax_ + size_t(nl_) * nh_);
+    cmax_ = nullptr;   // table() now answers with the copy
 }
 
 void OutputTransform::encode_rgba8(const std::vector<float>& rgb, std::vector<uint8_t>& rgba) const {
@@ -497,6 +532,7 @@ static void exif_fields(IfdBuilder& exif, const Exif& e, uint32_t w, uint32_t h)
     exif.ascii(0x9003, e.datetime_original);
     rational_value(exif, 0x920A, e.focal_mm, false);
     exif.ascii(0xA434, e.lens);
+    if (e.color_space) exif.shorts(0xA001, {e.color_space});
     exif.longs(0xA002, {w});
     exif.longs(0xA003, {h});
 }
@@ -526,7 +562,12 @@ std::vector<uint8_t> exif_block(const Exif& e, uint32_t w, uint32_t h) {
 }
 
 bool encode_tiff(const void* rgb, uint32_t w, uint32_t h, uint32_t bits, const std::vector<uint8_t>& icc,
-                 std::vector<uint8_t>& out, std::string& error, const Exif* exif_fields_in) {
+                 std::vector<uint8_t>& out, std::string& error, const Exif* exif_fields_in,
+                 const TiffPreview* preview) {
+    if (preview && (!preview->rgb || !preview->width || !preview->height)) {
+        error = "TIFF preview page has no pixels";
+        return false;
+    }
     if (bits != 8 && bits != 16) { error = "TIFF bits must be 8 or 16"; return false; }
     const uint64_t row_bytes = uint64_t(w) * 3 * (bits / 8);
     const uint64_t image_bytes = row_bytes * h;
@@ -585,6 +626,37 @@ bool encode_tiff(const void* rgb, uint32_t w, uint32_t h, uint32_t bits, const s
             out[start + 2 * i] = uint8_t(src[i]);
             out[start + 2 * i + 1] = uint8_t(src[i] >> 8);
         }
+    }
+    if (preview) {
+        // IFD1 after the first page's pixels, then its own pixels; IFD0's
+        // next-IFD offset (after its entries) is patched to point at it.
+        const uint64_t preview_bytes = uint64_t(preview->width) * preview->height * 3;
+        size_t ifd1_at = out.size();
+        if (ifd1_at & 1) ++ifd1_at;
+        IfdBuilder page;
+        page.longs(254, {1});
+        page.longs(256, {preview->width});
+        page.longs(257, {preview->height});
+        page.shorts(258, {8, 8, 8});
+        page.shorts(259, {1});
+        page.shorts(262, {2});
+        const size_t page_offsets = page.placeholder(273, 1);
+        page.shorts(277, {3});
+        page.longs(278, {preview->height});
+        page.longs(279, {uint32_t(preview_bytes)});
+        page.shorts(284, {1});
+        if (!preview->icc.empty()) page.undefined(34675, preview->icc);
+        const size_t preview_at = (ifd1_at + page.size() + 15) & ~size_t(15);
+        if (preview_at + preview_bytes > 0xFFFFFFF0ull) { error = "image too large for a classic TIFF"; return false; }
+        page.patch(page_offsets, {uint32_t(preview_at)});
+        const auto b = page.serialize(ifd1_at);
+        out.resize(ifd1_at, 0);
+        out.insert(out.end(), b.begin(), b.end());
+        out.resize(preview_at, 0);
+        out.insert(out.end(), preview->rgb, preview->rgb + preview_bytes);
+        const size_t entries = size_t(out[ifd_at]) | (size_t(out[ifd_at + 1]) << 8);
+        const size_t next = ifd_at + 2 + entries * 12;
+        for (int i = 0; i < 4; ++i) out[next + i] = uint8_t(uint32_t(ifd1_at) >> (8 * i));
     }
     return true;
 }

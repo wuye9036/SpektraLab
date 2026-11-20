@@ -11,6 +11,15 @@
 #   SPEKTRALAB_LIBRAW_SOURCE    LibRaw 0.22.2 source tree (RAW decode)
 # The Vulkan loader is never linked: engine/third_party/volk opens it at run
 # time. glslangValidator compiles the kernels to SPIR-V at build time.
+
+# The sources are UTF-8 (comments carry µm, ×, §). Without /utf-8 MSVC reads
+# them in the system code page, and on a CJK locale (936) a multibyte sequence
+# at the end of a // comment can swallow the line after it.
+if(MSVC)
+    add_compile_options(/utf-8 /Zc:__cplusplus)
+    add_compile_definitions(NOMINMAX _USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS)
+endif()
+
 add_library(spektralab_core STATIC
     src/core/blob.cpp
     src/core/cam16.cpp
@@ -45,13 +54,17 @@ add_library(spektralab_pipeline OBJECT
     src/pipeline/engine.cpp
     src/pipeline/pipeline.cpp
     src/pipeline/scene_latitude.cpp
+    src/pipeline/contrast_mask.cpp
+    src/pipeline/overscan.cpp
 )
 set_target_properties(spektralab_pipeline PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# RFC-031/032: the film edge and the date back. overscan.cpp is the same on
+# every platform; only its 2-D raster differs (overscan_raster.hpp).
 if(APPLE)
-    target_sources(spektralab_pipeline PRIVATE
-        src/pipeline/contrast_mask.cpp src/pipeline/overscan.cpp)
+    target_sources(spektralab_pipeline PRIVATE src/pipeline/overscan_raster_apple.cpp)
 else()
-    target_sources(spektralab_pipeline PRIVATE src/pipeline/windows_unported.cpp)
+    target_sources(spektralab_pipeline PRIVATE
+        src/pipeline/overscan_raster_portable.cpp src/pipeline/edge_raster.cpp)
 endif()
 target_link_libraries(spektralab_pipeline PRIVATE spektralab_core)
 target_include_directories(spektralab_pipeline PRIVATE
@@ -115,6 +128,11 @@ if(NOT APPLE)
             spk_reduce_max spk_boost spk_bw_correct spk_edr spk_cctf_decode
             spk_zoom_bilinear_mirror spk_geometry_resample_df
             spk_lut3d_trilinear spk_di_normalise
+            spk_mask_reduce spk_mask_epilogue
+            spk_overscan_canvas spk_overscan_film_present spk_overscan_light
+            spk_di_encode spk_scene_latitude
+            spk_overscan_add_mask
+            spk_scene_tone_reduce spk_scene_tone
             CACHE INTERNAL "")
         set(vulkan_spirv)
         file(GLOB vulkan_includes "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/vulkan/*.glsl")
@@ -131,9 +149,22 @@ if(NOT APPLE)
             list(APPEND vulkan_spirv "${spirv}")
         endforeach()
         set(SPEKTRALAB_VULKAN_SPIRV ${vulkan_spirv} CACHE INTERNAL "")
+        # resources_portable/fonts: the film edge's faces off Apple, kept out
+        # of resources/ so build.sh never syncs them into the macOS app.
+        # resources_product/profiles: the product's own black-and-white films
+        # and silver paper. The engine opens a stock from the one profiles/
+        # directory, so they are laid beside spektrafilm's with their notice,
+        # exactly as `engine/build.sh bundle` lays them into the macOS app.
         add_custom_target(spektralab_vulkan_resources
             COMMAND "${CMAKE_COMMAND}" -E copy_directory
                     "${CMAKE_CURRENT_SOURCE_DIR}/resources" "${vulkan_resource_dir}"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                    "${CMAKE_CURRENT_SOURCE_DIR}/resources_portable/fonts" "${vulkan_resource_dir}/fonts"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                    "${CMAKE_CURRENT_SOURCE_DIR}/resources_product/profiles" "${vulkan_resource_dir}/profiles"
+            COMMAND "${CMAKE_COMMAND}" -E copy
+                    "${CMAKE_CURRENT_SOURCE_DIR}/resources_product/NOTICE.md"
+                    "${vulkan_resource_dir}/PRODUCT_PROFILES_NOTICE.md"
             DEPENDS ${vulkan_spirv}
             VERBATIM)
 
@@ -170,17 +201,34 @@ if(NOT APPLE)
                 add_subdirectory(host)
             endif()
             if(WIN32 AND SPEKTRALAB_BUILD_DESKTOP)
-                add_library(spk_desktop_host STATIC src/desktop/preview_host.cpp)
+                # White balance at decode reuses spektralab-host's
+                # Temperature/Tint conversion, which reads LibRaw's matrix; a
+                # TIFF/JPEG/PNG is decoded at the door by spektralab-host's
+                # reader (host/image_io, with its TIFF, stb and platform parts),
+                # compiled here once for every desktop target.
+                add_library(spk_desktop_host STATIC src/desktop/preview_host.cpp
+                    src/desktop/raw_white_balance.cpp host/white_balance.cpp src/desktop/half_frame_pair.cpp
+                    host/image_io.cpp host/platform.cpp host/tiff_ifd.cpp host/stb_impl.cpp)
                 target_compile_features(spk_desktop_host PUBLIC cxx_std_20)
                 target_include_directories(spk_desktop_host PUBLIC
-                    "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/include")
-                target_link_libraries(spk_desktop_host PUBLIC spk_image_io spektralab_engine)
+                    "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/include"
+                    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/host" "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb")
+                target_link_libraries(spk_desktop_host PUBLIC spk_image_io spektralab_engine shell32 PRIVATE spk_libraw)
                 add_executable(SpektraLab WIN32 tools/windows_preview.cpp)
                 target_link_libraries(SpektraLab PRIVATE spk_desktop_host comctl32 comdlg32 shell32 gdi32 user32)
                 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/licenses")
                 foreach(notice LICENSE SPEKTRAFILM_LICENSE.txt)
                     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/../license/${notice}" "licenses/${notice}" COPYONLY)
                 endforeach()
+                # The film edge's text: stb_truetype (MIT) reads TeX Gyre Heros (GUST).
+                configure_file("${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb/LICENSE" "licenses/stb-LICENSE" COPYONLY)
+                configure_file("${CMAKE_CURRENT_SOURCE_DIR}/resources_portable/fonts/GUST-FONT-LICENSE.txt"
+                               "licenses/TeX-Gyre-Heros-GUST-FONT-LICENSE.txt" COPYONLY)
+                # The black-and-white profiles are SpektraLab's, not spektrafilm's
+                # (CC BY-SA): their notice says what each is built from and whose
+                # trademarks the names are, and it travels with them.
+                configure_file("${CMAKE_CURRENT_SOURCE_DIR}/resources_product/NOTICE.md"
+                               "licenses/PRODUCT_PROFILES_NOTICE.md" COPYONLY)
                 if(MINGW)
                     target_link_options(SpektraLab PRIVATE -municode)
                 endif()
@@ -188,6 +236,17 @@ if(NOT APPLE)
                     add_executable(spk_desktop_preview_test tests/desktop_preview.cpp)
                     target_link_libraries(spk_desktop_preview_test PRIVATE spk_desktop_host)
                     add_test(NAME spk_desktop_preview COMMAND spk_desktop_preview_test)
+                    # White balance at decode and the neutral picker on a
+                    # synthetic camera; no RAW, no GPU.
+                    add_executable(spk_desktop_white_balance_test tests/desktop_white_balance.cpp)
+                    target_link_libraries(spk_desktop_white_balance_test PRIVATE spk_desktop_host)
+                    add_test(NAME spk_desktop_white_balance COMMAND spk_desktop_white_balance_test)
+                    # Half-frame pairs without a GPU or a RAW: the piece's
+                    # layout, the placement gestures, the composition on
+                    # synthetic pictures, the gates and the pair's wire.
+                    add_executable(spk_desktop_pair_test tests/desktop_pair.cpp)
+                    target_link_libraries(spk_desktop_pair_test PRIVATE spk_desktop_host)
+                    add_test(NAME spk_desktop_pair COMMAND spk_desktop_pair_test)
                 endif()
             endif()
             if(BUILD_TESTING)
@@ -244,7 +303,7 @@ if(NOT APPLE)
             add_test(NAME spk_vulkan_smoke
                 COMMAND spk_vulkan_smoke "${vulkan_resource_dir}")
 
-            foreach(probe grain pointwise resample transfer geometry lut_di)
+            foreach(probe grain pointwise resample transfer geometry lut_di contrast_mask overscan di_latitude overscan_add_mask)
                 add_executable(spk_vulkan_${probe} tests/gpu_vulkan_${probe}.cpp)
                 target_include_directories(spk_vulkan_${probe} PRIVATE
                     "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -255,6 +314,15 @@ if(NOT APPLE)
                     COMMAND spk_vulkan_${probe} "${vulkan_resource_dir}")
             endforeach()
 
+            # The portable imprint raster, CPU only; it reads the staged fonts.
+            add_executable(spk_edge_raster tests/edge_raster_test.cpp)
+            target_include_directories(spk_edge_raster PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/include"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src")
+            target_link_libraries(spk_edge_raster PRIVATE spektralab_engine)
+            add_dependencies(spk_edge_raster spektralab_vulkan_resources)
+            add_test(NAME spk_edge_raster COMMAND spk_edge_raster "${vulkan_resource_dir}")
+
             if(SPEKTRALAB_BUILD_TEST_DLL)
                 add_executable(spk_windows_feature_boundaries tests/windows_feature_boundaries.cpp)
                 target_compile_features(spk_windows_feature_boundaries PRIVATE cxx_std_20)
@@ -262,6 +330,20 @@ if(NOT APPLE)
                 target_link_libraries(spk_windows_feature_boundaries PRIVATE spektralab_engine_shared)
                 add_test(NAME spk_windows_feature_boundaries
                     COMMAND spk_windows_feature_boundaries "${vulkan_resource_dir}")
+
+                add_executable(spk_date_back tests/date_back_render.cpp)
+                target_compile_features(spk_date_back PRIVATE cxx_std_20)
+                target_include_directories(spk_date_back PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+                target_link_libraries(spk_date_back PRIVATE spektralab_engine_shared)
+                add_test(NAME spk_date_back COMMAND spk_date_back "${vulkan_resource_dir}")
+
+                # Film Edge end to end through the C ABI: what
+                # tests/overscan_checks.py checks, without Python.
+                add_executable(spk_film_edge tests/film_edge_render.cpp)
+                target_compile_features(spk_film_edge PRIVATE cxx_std_20)
+                target_include_directories(spk_film_edge PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+                target_link_libraries(spk_film_edge PRIVATE spektralab_engine_shared)
+                add_test(NAME spk_film_edge COMMAND spk_film_edge "${vulkan_resource_dir}")
 
                 add_executable(spk_render_fixture tests/render_fixture.cpp)
                 target_compile_features(spk_render_fixture PRIVATE cxx_std_20)

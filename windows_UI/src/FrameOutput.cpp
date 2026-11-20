@@ -1,11 +1,12 @@
 #include "FrameOutput.hpp"
+#include "FrameImage.hpp"
 #include "io/image_writer.hpp"
 #include <QColorSpace>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QImageWriter>
-#include <QTemporaryDir>
+#include <QRandomGenerator>
 #include <QTransform>
 #include <algorithm>
 #include <cmath>
@@ -82,6 +83,30 @@ void publish(const fs::path& partial,const fs::path& destination) {
 #endif
 }
 
+} // namespace
+
+StagingDir::StagingDir(const QString& folder) {
+    const auto base=nativePath(QDir::toNativeSeparators(folder));
+    static constexpr char letters[]="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    for(int attempt=0;attempt<64;++attempt) {
+        QString name=QStringLiteral(".spektralab-export-");
+        for(int i=0;i<6;++i)name+=QLatin1Char(letters[QRandomGenerator::global()->bounded(int(sizeof letters-1))]);
+        const auto candidate=base/nativePath(name);
+        std::error_code error;
+        if(fs::create_directory(candidate,error)){path_=candidate;return;}
+        if(error)fail(QStringLiteral("Cannot create an export temporary folder in %1: %2")
+                      .arg(QDir::toNativeSeparators(folder),QString::fromLocal8Bit(error.message())));
+        // false without an error: the name is taken; draw another.
+    }
+    fail(QStringLiteral("Cannot create an export temporary folder in %1").arg(QDir::toNativeSeparators(folder)));
+}
+StagingDir::~StagingDir() {
+    std::error_code ignored;
+    fs::remove_all(path_,ignored);
+}
+fs::path StagingDir::filePath(const QString& name) const { return path_/nativePath(name); }
+
+namespace {
 QImage framePixels(const FramePtr& frame) {
     if(!frame)fail(QStringLiteral("No rendered photograph to export"));
     const auto& result=frame->pixels();
@@ -109,24 +134,32 @@ QImage straighten(const QImage& source,double degrees) {
                                std::abs(cosine)+std::abs(sine)*width/height);
     const double c=cosine/zoom,s=sine/zoom;
     const double centerX=(width-1)*.5,centerY=(height-1)*.5;
-    for(int y=0;y<height;++y) {
-        auto* row=reinterpret_cast<QRgba64*>(output.scanLine(y));
-        for(int x=0;x<width;++x) {
-            const double sourceX=std::clamp(centerX+c*(x-centerX)+s*(y-centerY),0.0,double(width-1));
-            const double sourceY=std::clamp(centerY-s*(x-centerX)+c*(y-centerY),0.0,double(height-1));
-            const int x0=int(sourceX),y0=int(sourceY),x1=std::min(x0+1,width-1),y1=std::min(y0+1,height-1);
-            const double fx=sourceX-x0,fy=sourceY-y0;
-            const auto* top=reinterpret_cast<const QRgba64*>(pixels.constScanLine(y0));
-            const auto* bottom=reinterpret_cast<const QRgba64*>(pixels.constScanLine(y1));
-            auto channel=[&](quint16 a,quint16 b,quint16 d,quint16 e) {
-                return quint16(std::clamp(std::lround((a+(b-a)*fx)*(1-fy)+(d+(e-d)*fx)*fy),0L,65535L));
-            };
-            row[x]=QRgba64::fromRgba64(channel(top[x0].red(),top[x1].red(),bottom[x0].red(),bottom[x1].red()),
-                channel(top[x0].green(),top[x1].green(),bottom[x0].green(),bottom[x1].green()),
-                channel(top[x0].blue(),top[x1].blue(),bottom[x0].blue(),bottom[x1].blue()),
-                channel(top[x0].alpha(),top[x1].alpha(),bottom[x0].alpha(),bottom[x1].alpha()));
+    // Rows across the cores (display::parallelRows): every output pixel is
+    // the same arithmetic on the same inputs whichever thread has its row, so
+    // the result is bit-identical to one thread's.
+    // scanLine() detaches, so it is called once here, not from the threads.
+    uchar* const outputBits=output.bits();
+    const qsizetype outputStride=output.bytesPerLine();
+    display::parallelRows(height,[&](int rowBegin,int rowEnd){
+        for(int y=rowBegin;y<rowEnd;++y) {
+            auto* row=reinterpret_cast<QRgba64*>(outputBits+outputStride*y);
+            for(int x=0;x<width;++x) {
+                const double sourceX=std::clamp(centerX+c*(x-centerX)+s*(y-centerY),0.0,double(width-1));
+                const double sourceY=std::clamp(centerY-s*(x-centerX)+c*(y-centerY),0.0,double(height-1));
+                const int x0=int(sourceX),y0=int(sourceY),x1=std::min(x0+1,width-1),y1=std::min(y0+1,height-1);
+                const double fx=sourceX-x0,fy=sourceY-y0;
+                const auto* top=reinterpret_cast<const QRgba64*>(pixels.constScanLine(y0));
+                const auto* bottom=reinterpret_cast<const QRgba64*>(pixels.constScanLine(y1));
+                auto channel=[&](quint16 a,quint16 b,quint16 d,quint16 e) {
+                    return quint16(std::clamp(std::lround((a+(b-a)*fx)*(1-fy)+(d+(e-d)*fx)*fy),0L,65535L));
+                };
+                row[x]=QRgba64::fromRgba64(channel(top[x0].red(),top[x1].red(),bottom[x0].red(),bottom[x1].red()),
+                    channel(top[x0].green(),top[x1].green(),bottom[x0].green(),bottom[x1].green()),
+                    channel(top[x0].blue(),top[x1].blue(),bottom[x0].blue(),bottom[x1].blue()),
+                    channel(top[x0].alpha(),top[x1].alpha(),bottom[x0].alpha(),bottom[x1].alpha()));
+            }
         }
-    }
+    });
     output.setColorSpace(source.colorSpace());
     return output;
 }
@@ -168,8 +201,8 @@ QRect cropPixels(QSize fullSize,QRectF crop) {
     return {left,top,right-left,bottom-top};
 }
 
-QImage displayImage(const QImage& full8,QRectF crop) {
-    return displayImage(full8,Geometry{crop});
+QImage displayImage(const QImage& full,QRectF crop) {
+    return displayImage(full,Geometry{crop});
 }
 
 void validateGeometry(QSize size,const Geometry& geometry) {
@@ -180,9 +213,9 @@ void validateGeometry(QSize size,const Geometry& geometry) {
         fail(QStringLiteral("Straightening must be between -45 and +45 degrees"));
 }
 
-QImage displayImage(const QImage& full8,const Geometry& geometry) {
-    auto output=applyGeometry(full8,geometry);
-    if(output.format()!=full8.format())output=output.convertToFormat(full8.format());
+QImage displayImage(const QImage& full,const Geometry& geometry) {
+    auto output=applyGeometry(full,geometry);
+    if(output.format()!=full.format())output=output.convertToFormat(full.format());
     if(output.isNull())fail(QStringLiteral("Cannot allocate the transformed preview"));
     return output;
 }
@@ -198,11 +231,14 @@ QImage exportImage(const QImage& fullRgba64,const Geometry& geometry,const Expor
     validateGeometry(fullRgba64.size(),geometry);
     const auto rect=cropPixels(fullRgba64.size(),geometry.crop);
     // Validate only the exported region: padding is not part of the image.
-    for(int y=rect.top();y<=rect.bottom();++y) {
-        const auto* row=reinterpret_cast<const QRgba64*>(fullRgba64.constScanLine(y));
-        for(int x=rect.left();x<=rect.right();++x)
-            if(row[x].alpha()!=65535)fail(QStringLiteral("Export requires opaque pixels"));
-    }
+    // Rows across the cores, as the straighten.
+    display::parallelRows(rect.height(),[&](int rowBegin,int rowEnd){
+        for(int y=rect.top()+rowBegin;y<rect.top()+rowEnd;++y) {
+            const auto* row=reinterpret_cast<const QRgba64*>(fullRgba64.constScanLine(y));
+            for(int x=rect.left();x<=rect.right();++x)
+                if(row[x].alpha()!=65535)fail(QStringLiteral("Export requires opaque pixels"));
+        }
+    });
     QImage output=applyGeometry(fullRgba64,geometry);
     if(options.maxLongEdge && std::max(output.width(),output.height())>options.maxLongEdge) {
         const double ratio=double(options.maxLongEdge)/std::max(output.width(),output.height());
@@ -218,11 +254,11 @@ QImage exportImage(const QImage& fullRgba64,const Geometry& geometry,const Expor
 }
 
 QImage displayFrame(const FramePtr& frame,const Geometry& geometry) {
-    const auto pixels=exportImage(framePixels(frame),geometry,{});
-    auto output=pixels.convertToFormat(QImage::Format_ARGB32);
-    if(output.isNull())fail(QStringLiteral("Cannot allocate the transformed preview"));
-    output.setColorSpace(QColorSpace::SRgb);
-    return output;
+    const auto source=framePixels(frame);
+    // Tag before transforming, so an encoding the display cannot name is
+    // refused before any work; the pixels keep the session's encoding.
+    const auto space=display::colorSpace(frame->encoding);
+    return display::halfImage(exportImage(source,geometry,{}),space);
 }
 
 bool formatAvailable(Format format) {
@@ -251,9 +287,8 @@ void exportImageFile(const QImage& fullRgba64,const fs::path& destination,
     if(!target.absoluteDir().exists())fail(QStringLiteral("The export folder does not exist"));
     auto pixels=exportImage(fullRgba64,geometry,options);
     pixels.setColorSpace(profile(resources));
-    QTemporaryDir staging(target.absoluteDir().filePath(QStringLiteral(".spektralab-export-XXXXXX")));
-    if(!staging.isValid())fail(QStringLiteral("Cannot create an export temporary file in this folder"));
-    const auto partial=nativePath(staging.filePath(QStringLiteral("output.partial")));
+    const StagingDir staging(target.absolutePath());
+    const auto partial=staging.filePath(QStringLiteral("output.partial"));
     if(options.format==Format::TIFF16) {
         std::string error;
         if(!io::write_srgb_tiff(partial,reinterpret_cast<const std::uint16_t*>(pixels.constBits()),
@@ -282,8 +317,28 @@ void exportFrame(const FramePtr& frame,const fs::path& destination,QRectF crop,
 
 void exportFrame(const FramePtr& frame,const fs::path& destination,const Geometry& geometry,
                  const ExportOptions& options,const fs::path& resources) {
+    exportFrame(frame,destination,geometry,options,resources,{});
+}
+
+void exportFrame(const FramePtr& frame,const fs::path& destination,const Geometry& geometry,
+                 const ExportOptions& options,const fs::path& resources,
+                 const std::function<void(QImage&,const OutputEncoding&)>& grade) {
     // The caller's immutable FramePtr stays alive throughout this synchronous
     // function; crop/downsize/detach cannot modify its retained RGBA16 result.
-    exportImageFile(framePixels(frame),destination,geometry,options,resources);
+    auto pixels=framePixels(frame);
+    // Every writer labels the file with the bundled sRGB profile. A frame in
+    // any other encoding would be mislabelled, so it is refused until export
+    // converts out of the working space.
+    if(!frame->encoding.is_encoded_srgb())
+        fail(QStringLiteral("Export writes sRGB, but this frame is encoded in %1%2")
+             .arg(QString::fromStdString(frame->encoding.color_space),
+                  frame->encoding.cctf_encoding?QString():QStringLiteral(" (linear)")));
+    if(grade) {
+        // A private copy: the engine's frame is shared and immutable.
+        pixels=pixels.copy();
+        if(pixels.isNull())fail(QStringLiteral("Cannot allocate the graded photograph"));
+        grade(pixels,frame->encoding);
+    }
+    exportImageFile(pixels,destination,geometry,options,resources);
 }
 } // namespace spk::desktop::output

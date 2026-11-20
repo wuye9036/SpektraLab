@@ -48,6 +48,7 @@
 #include "print_lut.hpp"
 #include "setup_cache.hpp"
 #ifndef __APPLE__
+#include "overscan_raster.hpp"
 #include "windows_unported.hpp"
 #endif
 
@@ -316,12 +317,12 @@ struct spk_engine {
         backend.set("host", Json(std::string("native")));
         backend.set("math_mode", Json(math_mode));
 #ifndef __APPLE__
-        // These upstream effects still require kernels or Apple services that
-        // have not been ported. Defaults stay usable; explicit requests fail.
+        // Upstream effects without a Windows implementation, from
+        // windows_unported.hpp's table: empty since Film Edge was ported
+        // (2026-10-16), and still emitted, because hosts read the key.
         Json unported = Json::array();
-        for (const char* feature : {"digital_intermediate", "scene_latitude_mapping",
-                                    "contrast_mask", "overscan", "date_imprint"})
-            unported.push(Json(std::string(feature)));
+        for (const auto& row : kWindowsFeatures)
+            if (!row.ported) unported.push(Json(std::string(row.capability)));
         backend.set("unsupported_features", std::move(unported));
 #endif
         // Concurrent entry is safe: there is no numba here, and renders on
@@ -579,6 +580,8 @@ spk_engine* spk_engine_create(const char* resources_dir, void* device) {
 
 #ifndef __APPLE__
     if (device) { g_error = "Windows device-buffer input is not implemented yet; pass null"; return nullptr; }
+    // The film edge's faces (overscan_raster_portable.cpp), read on first use.
+    imprint::set_font_directory(engine->resources_dir + "/fonts");
     engine->gpu = gpu::Gpu::create_vulkan(engine->resources_dir + "/vulkan", error);
 #else
     engine->gpu = gpu::Gpu::create_metal(device, engine->resources_dir + "/spektrafilm.metallib", error);
@@ -1623,9 +1626,11 @@ spk_status spk_render_digital_intermediate(spk_session* session, spk_result* out
     g_error.clear();
     std::memset(out, 0, sizeof *out);
 #ifndef __APPLE__
-    if (out_json) *out_json = nullptr;
-    g_error = windows_unported_error(true, false, false, false, false);
-    return SPK_ERR_USER;
+    if (const char* unported = windows_unported_error(WindowsFeature::DigitalIntermediate, true)) {
+        if (out_json) *out_json = nullptr;
+        g_error = unported;
+        return SPK_ERR_USER;
+    }
 #endif
     if (session->params.film.info.is_positive()) {
         g_error = "a slide film has no orange mask and no negative to reverse, so it has no "
@@ -1707,7 +1712,7 @@ spk_status spk_set_params(spk_session* session, const char* params_delta_json, c
 #ifndef __APPLE__
     // Reject before applying the delta, so a failed request cannot leave the
     // session's params ahead of its still-valid, previously built pipeline.
-    if (const char* unported = windows_unported_delta_error(delta)) {
+    if (const char* unported = windows_unported_delta_error(delta, session->params)) {
         g_error = unported;
         return SPK_ERR_USER;
     }
@@ -1829,6 +1834,8 @@ Params medium_probe_params(const Params& session) {
     Params p = session;
     p.camera.auto_exposure = false;
     p.camera.scene_latitude.active = false;
+    // The scene's own Highlights and Shadows are not the medium either.
+    p.camera.scene_tone = SceneToneParams{};
     p.film_render.grain.active = false;
     p.film_render.grain.sublayers_active = false;
     p.film_render.halation.active = false;
@@ -2032,8 +2039,13 @@ spk_status spk_scene_latitude(spk_session* session, const char* request_json, ch
         }
         char region_text[160];
         std::snprintf(region_text, sizeof region_text, "|%.6f,%.6f,%.6f,%.6f", region[0], region[1], region[2], region[3]);
+        // The scene's Highlights and Shadows are in the sample (they sit
+        // between the meter and the node), so they are in its key.
+        char tone_text[64];
+        std::snprintf(tone_text, sizeof tone_text, "|tone %.17g,%.17g", session->params.camera.scene_tone.highlights,
+                      session->params.camera.scene_tone.shadows);
         const std::string scene_key = meter_key(session->params) + base.norm + "|" + ev_text +
-                                      (has_region ? region_text : "");
+                                      (has_region ? region_text : "") + tone_text;
         if (cache.scene_key != scene_key) {
             Image small;
             std::vector<double> E;

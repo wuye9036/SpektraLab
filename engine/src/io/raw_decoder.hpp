@@ -24,6 +24,22 @@ struct RawSourceSizes {
     double pixel_aspect = 1.0;
 };
 
+// The handful of EXIF values a Film Edge or Date Back prints: macOS
+// ShootingData (Session+FilmEdge.swift:39-79), read from the same tags --
+// DateTimeOriginal, ExposureTime, FNumber, ExposureProgram, ExposureBiasValue
+// and FocalLenIn35mmFilm. A field the file does not carry stays at its
+// "absent" value and is left out of what is printed, never invented.
+struct ShootingData {
+    int year = 0, month = 0, day = 0;  // DateTimeOriginal's day; year 0 = no date
+    double exposure_time = 0.0;        // seconds; 0 = absent
+    double f_number = 0.0;             // 0 = absent
+    int exposure_program = 0;          // 1 M, 2 P, 3 A, 4 S, other or 0: no letter
+    bool has_bias = false;
+    double exposure_bias = 0.0;        // the camera's own compensation, EV
+    double focal_35mm = 0.0;           // 0 = absent
+    bool operator==(const ShootingData&) const = default;
+};
+
 struct RawMetadata {
     std::string libraw_version;
     std::uint32_t libraw_capabilities = 0;
@@ -48,12 +64,26 @@ struct RawMetadata {
     std::uint32_t process_warnings = 0;
     // Row-major 3 x 4 camera-to-linear-sRGB matrix used by LibRaw.
     std::array<float, 12> rgb_cam{};
+    // LibRaw's colour count and its XYZ->camera matrix (`cam_xyz`'s first
+    // three rows, row-major), as the file was identified: what a white
+    // balance in Temperature/Tint is converted through (engine/host/
+    // white_balance.hpp). Zero for a camera LibRaw has no matrix for.
+    int colors = 0;
+    std::array<double, 9> xyz_to_camera{};
     // Opt-in headroom policy only. The matrix is LibRaw's actual camera-to-
     // ProPhoto matrix, captured at its float conversion boundary. The scale
     // restores the min-WB exposure convention after max-WB normalisation.
     bool headroom_enabled = false;
     double white_balance_exposure_restore = 1.0;
     std::array<float, 12> camera_to_output{};
+    ShootingData shooting;
+    // Set by the two RAW policies (capture_source_metadata): the data is
+    // sensor response. False for a flat file decoded at the door, which is
+    // already somebody's rendering of a scene.
+    bool camera_raw = false;
+    // The DNG BaselineExposure tag in EV, zero when the file has none (every
+    // non-DNG RAW). A display rendering of the RAW adds it; the engine does not.
+    double baseline_exposure_ev = 0.0;
 };
 
 struct DecodedRaw {
@@ -93,6 +123,13 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
 // Unsupported sensor/layout/WB cases fail explicitly; compatible16 is never
 // substituted. On failure, out is unchanged.
 bool decode_raw_headroom(const std::filesystem::path& source,
+                         DecodedRaw& out, std::string& error);
+
+// The headroom policy with caller-chosen multipliers, as the compatible
+// overload above takes them. LibRaw normalises them by their largest, as it
+// does the as-shot ones under this policy, so the exposure restore holds.
+// nullptr is the overload above. Used by the Windows desktop host.
+bool decode_raw_headroom(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
                          DecodedRaw& out, std::string& error);
 
 }  // namespace spk::io

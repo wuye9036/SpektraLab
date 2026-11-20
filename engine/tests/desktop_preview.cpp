@@ -1,5 +1,7 @@
 // Headless tests of the desktop host boundary. The default invocation is pure
-// CPU conversion; optional integration uses the real engine and RAW fixture.
+// CPU: conversion, viewport and the settings table against the engine schema.
+// --settings-engine drives the table through the real engine on a synthetic
+// frame; the other modes use the real engine and RAW fixtures.
 #include "desktop/preview_host.hpp"
 #include "desktop/viewport.hpp"
 #include "core/json.hpp"
@@ -75,22 +77,631 @@ std::uint64_t frame_fingerprint(const Frame& frame) {
     return hash;
 }
 
+Json json_of(const SettingValue& value) {
+    return std::visit([](const auto& v) { return Json(v); }, value);
+}
+
+bool same_json(const Json& a, const Json& b) { return a.dump() == b.dump(); }
+
+std::vector<std::string> keys_of(const Json& object) {
+    std::vector<std::string> keys;
+    for (const auto& kv : object.fields()) keys.push_back(kv.first);
+    return keys;
+}
+
+// A catalogue shaped like the real one, small enough to reason about: two
+// colour negatives that name a paper, a slide that names none, a
+// black-and-white film on its silver paper, and a cine paper.
+Catalog test_catalog() {
+    return {{{"kodak_portra_400", "Portra 400", false, false, false, "kodak_portra_endura"},
+             {"kodak_ektar_100", "Ektar 100", false, false, false, "kodak_portra_endura"},
+             {"kodak_ektachrome_100", "Ektachrome 100", true},
+             {"kodak_tri_x_400", "Tri-X 400", false, false, true, "ilford_multigrade_iv_rc"}},
+            {{"kodak_supra_endura", "Supra Endura", false}, {"kodak_portra_endura", "Portra Endura", false},
+             {"ilford_multigrade_iv_rc", "Multigrade IV RC", false, false, true},
+             {"kodak_2383", "Vision 2383", false, true}}};
+}
+
+// The desktop table against the engine's own: every row is a wire field of
+// the same type and layer, inside the engine's range, and `absent` -- what a
+// record saved before the row existed rendered with -- is the engine default.
+// A product row is no engine field at all, and an older record was made with
+// its initial behaviour.
+void settings_schema() {
+    const auto& fields = setting_fields();
+    const Json engine_defaults = spk::read_params(spk::Params{});
+    std::vector<std::string> seen;
+    for (const auto& field : fields) {
+        check(std::find(seen.begin(), seen.end(), field.key) == seen.end(), "duplicate settings row");
+        seen.push_back(field.key);
+        check(find_setting(field.key) == &field, "find_setting does not return the table row");
+        const auto& schema = spk::schema_fields();
+        const auto row = std::find_if(schema.begin(), schema.end(),
+            [&](const spk::SchemaField& f) { return field.key == f.name; });
+        if (!field.wire) {
+            if (row != schema.end()) throw std::runtime_error("product row shadows an engine field: " + field.key);
+            check(field.initial == field.absent && check_setting(field, field.initial).empty(),
+                  "a product row's defaults disagree or fail its validation");
+            continue;
+        }
+        if (row == schema.end()) throw std::runtime_error("settings row is not an engine wire field: " + field.key);
+        const auto expected = field.type == SettingType::boolean ? spk::FieldType::Bool
+                            : field.type == SettingType::number ? spk::FieldType::Float : spk::FieldType::Str;
+        // A number row may carry an integer field (the film edge's seeds and
+        // frame number); wire_params sends it rounded.
+        check(row->type == expected || (field.type == SettingType::number && row->type == spk::FieldType::Int),
+              "settings row type differs from the engine schema");
+        check((field.layer == SettingLayer::shoot) == (row->layer == spk::Layer::Shoot),
+              "settings row layer differs from the engine schema");
+        if (field.type == SettingType::number)
+            check(row->has_range && field.low >= row->lo && field.high <= row->hi && field.low < field.high,
+                  "desktop range is wider than the engine's");
+        if (!same_json(json_of(field.absent), engine_defaults.at(field.key)))
+            throw std::runtime_error("absent value is not the engine default: " + field.key);
+        check(check_setting(field, field.initial).empty() && check_setting(field, field.absent).empty(),
+              "a row's own defaults fail its validation");
+        for (const auto& name : field.listed) {
+            Json probe = Json::object();
+            probe.set(field.key, Json(name));
+            std::string error, param;
+            check(spk::validate_delta(probe, error, param), "a listed choice is refused by the engine");
+        }
+    }
+    // The complete open request, fixed I/O policy included, is one the
+    // engine's schema accepts: no misspelt or retired wire name -- the
+    // black-and-white pair's neutral pack included.
+    // `product_defaults` is spk_open's own option, taken out before it
+    // validates (engine.cpp), and has no schema row.
+    const auto render_params = [](const Json& open) {
+        Json rest = Json::object();
+        for (const auto& [key, value] : open.fields())
+            if (key != "product_defaults") rest.set(key, value);
+        return rest;
+    };
+    std::string error, param;
+    if (!spk::validate_delta(render_params(opening_params(RenderSettings{}, test_catalog())), error, param))
+        throw std::runtime_error("default opening parameters fail the engine schema: " + error);
+    RenderSettings silver;
+    silver.film_stock = "kodak_tri_x_400";
+    silver.print_stock = "ilford_multigrade_iv_rc";
+    if (!spk::validate_delta(render_params(opening_params(silver, test_catalog())), error, param))
+        throw std::runtime_error("black-and-white opening parameters fail the engine schema: " + error);
+}
+
+// Defaults: the engine's, except where a new photograph follows macOS.
 void settings_defaults() {
-    // A second host default must agree with the engine's own parameter tree;
-    // a UI format label such as "35 mm" is not licence to substitute 36.
     const RenderSettings settings;
-    const spk::Params engine;
-    check(settings.print_exposure == engine.enlarger.print_exposure, "desktop print default differs from engine");
-    check(settings.film_exposure_ev == engine.camera.exposure_compensation_ev, "desktop film exposure default differs from engine");
-    check(settings.film_format_mm == engine.camera.film_format_mm, "desktop film format default differs from engine");
-    check(settings.grain_active == engine.film_render.grain.active && settings.grain_amount == engine.film_render.grain.amount,
-          "desktop grain defaults differ from engine");
-    check(settings.halation_active == engine.film_render.halation.active && settings.halation_amount == engine.film_render.halation.halation_amount,
-          "desktop halation defaults differ from engine");
-    check(settings.glare_active == engine.print_render.glare.active && settings.glare_amount == engine.print_render.glare.amount,
-          "desktop glare defaults differ from engine");
-    check(settings.y_filter_shift == engine.enlarger.y_filter_shift && settings.m_filter_shift == engine.enlarger.m_filter_shift,
-          "desktop enlarger defaults differ from engine");
+    std::vector<std::string> deviations;
+    for (const auto& field : setting_fields()) {
+        check(settings.get(field.key) == field.initial, "default settings differ from the rows' initial values");
+        if (field.initial != field.absent) deviations.push_back(field.key);
+    }
+    // Each with its macOS source (Params.swift): FilmParams.printStock,
+    // FilmParams.filterShiftCC, FilmParams.autoExposureMethod.
+    check(deviations == std::vector<std::string>{"print_stock", "filter_shift_scale", "auto_exposure_method"},
+          "new-photograph defaults deviate from the engine for an undocumented row");
+    check(settings.film_stock == "kodak_portra_400" && settings.print_stock == "kodak_supra_endura",
+          "default film/paper pair is not the macOS one");
+    check(settings.get("filter_shift_scale") == SettingValue(40.0), "filter sliders are not macOS strength");
+    check(settings.get("auto_exposure_method") == SettingValue(std::string("balanced")),
+          "default metering is not balanced");
+    // A UI format label such as "35 mm" is no licence to substitute 36.
+    check(settings.film_format_mm == 35.0, "desktop film format default differs from engine");
+}
+
+void settings_access() {
+    RenderSettings settings;
+    // Named members and keyed access are one value.
+    settings.film_exposure_ev = 1.25;
+    check(settings.get("exposure_compensation_ev") == SettingValue(1.25), "named member and wire key disagree");
+    settings.set("exposure_compensation_ev", 2.5);
+    check(settings.film_exposure_ev == 2.5, "keyed write missed the named member");
+    settings.set("grain_active", false);
+    check(!settings.grain_active, "keyed bool write missed the named member");
+    settings.set("print_stock", std::string("kodak_portra_endura"));
+    check(settings.print_stock == "kodak_portra_endura", "keyed text write missed the named member");
+    // A row without a member still takes part in equality.
+    RenderSettings other = settings;
+    check(other == settings, "copied settings differ");
+    other.set("filter_shift_scale", 1.0);
+    check(other != settings && other.get("filter_shift_scale") == SettingValue(1.0), "keyed-only row ignored");
+    other.set("filter_shift_scale", 40.0);
+    check(other == settings, "restored keyed-only row still differs");
+    rejected([&] { settings.set("no_such_setting", 1.0); }, "unknown setting accepted");
+    rejected([&] { (void)settings.get("no_such_setting"); }, "unknown setting read");
+    rejected([&] { settings.set("grain_amount", true); }, "bool accepted for a number row");
+    rejected([&] { settings.set("grain_active", 1.0); }, "number accepted for a bool row");
+    rejected([&] { settings.set("auto_exposure_method", 0.5); }, "number accepted for a text row");
+    check(settings.grain_amount == 1.0 && !settings.grain_active, "rejected write changed a value");
+}
+
+void settings_validation() {
+    const auto catalog = test_catalog();
+    RenderSettings settings;
+    check(!validate_settings(settings, catalog), "default negative film reported as scanned");
+    settings.set("scan_film", true);
+    check(validate_settings(settings, catalog), "No Print Profile did not scan a negative");
+    settings.set("scan_film", false);
+    settings.film_stock = "kodak_ektachrome_100";
+    check(validate_settings(settings, catalog), "slide film not reported as scanned");
+    for (const auto& field : setting_fields()) {
+        if (field.type == SettingType::number) {
+            for (double value : {field.low, field.high}) {
+                RenderSettings edge;
+                edge.set(field.key, value);
+                validate_settings(edge, catalog);
+                ++checks;
+            }
+            const double span = field.high - field.low;
+            for (double value : {field.low - span * 1e-3, field.high + span * 1e-3,
+                                 std::numeric_limits<double>::quiet_NaN(),
+                                 std::numeric_limits<double>::infinity(),
+                                 -std::numeric_limits<double>::infinity()}) {
+                RenderSettings invalid;
+                invalid.set(field.key, value);
+                const auto error = rejected([&] { validate_settings(invalid, catalog); },
+                                            "out-of-range setting accepted");
+                check(error.find(field.label) != std::string::npos, "range error does not name the setting");
+                check(!check_setting(field, SettingValue(value)).empty(), "check_setting accepted a bad number");
+            }
+        } else if (field.type == SettingType::text && field.choices == SettingChoices::free) {
+            // Free text: one short line of printable ASCII, nothing else.
+            for (const std::string bad : {std::string(kFreeTextMax + 1, '1'), std::string("'26\n10 1"),
+                                          std::string("\xC3\x97")}) {
+                RenderSettings invalid;
+                invalid.set(field.key, bad);
+                rejected([&] { validate_settings(invalid, catalog); }, "bad free text accepted");
+            }
+            check(check_setting(field, SettingValue(std::string(kFreeTextMax, '1'))).empty() &&
+                  check_setting(field, SettingValue(std::string("'26 10 1"))).empty(), "a printable line refused");
+        } else if (field.type == SettingType::text) {
+            RenderSettings invalid;
+            invalid.set(field.key, std::string("__not_a_choice__"));
+            rejected([&] { validate_settings(invalid, catalog); }, "unknown text choice accepted");
+        }
+        check(!check_setting(field, SettingValue(std::string("1"))).empty() || field.type == SettingType::text,
+              "text accepted for a non-text row");
+    }
+    // Without a catalogue only the shape of a stock can be judged.
+    const auto* film = find_setting("film_stock");
+    check(check_setting(*film, SettingValue(std::string("kodak_vision3_500t"))).empty(),
+          "stock rejected without a catalogue");
+    check(!check_setting(*film, SettingValue(std::string("kodak_vision3_500t")), &catalog).empty(),
+          "stock outside the catalogue accepted");
+}
+
+// The catalogue's rules, as macOS states them (StockCatalog.swift, Session
+// .swift selectFilmStock), on the test catalogue.
+void catalogue_rules() {
+    const auto catalog = test_catalog();
+    check(catalog.film("kodak_tri_x_400") && catalog.film("kodak_tri_x_400")->is_monochrome &&
+          !catalog.film("kodak_supra_endura") && catalog.paper("kodak_supra_endura") && !catalog.paper("nope"),
+          "catalogue lookup");
+    // Silver on silver, colour on colour; an unknown stock rules nothing out.
+    check(can_print(catalog, "kodak_tri_x_400", "ilford_multigrade_iv_rc") &&
+          !can_print(catalog, "kodak_tri_x_400", "kodak_supra_endura") &&
+          !can_print(catalog, "kodak_portra_400", "ilford_multigrade_iv_rc") &&
+          can_print(catalog, "kodak_portra_400", "kodak_2383") &&
+          can_print(catalog, "kodak_ektachrome_100", "kodak_supra_endura") &&
+          can_print(catalog, "unknown_film", "ilford_multigrade_iv_rc") &&
+          can_print(catalog, "kodak_tri_x_400", "unknown_paper"), "canPrint pairing rule");
+    // The film's own paper whenever it names one; a slide keeps the paper;
+    // across colour and black and white the paper cannot stay.
+    const std::string fallback = "kodak_supra_endura";
+    check(paper_for_film(catalog, "kodak_ektar_100", "kodak_supra_endura", fallback) == "kodak_portra_endura",
+          "a film did not take its own paper");
+    check(paper_for_film(catalog, "kodak_portra_400", "kodak_portra_endura", fallback) == "kodak_portra_endura",
+          "a film's own paper moved");
+    check(paper_for_film(catalog, "kodak_ektachrome_100", "kodak_2383", fallback) == "kodak_2383",
+          "a slide did not keep the paper for the next negative");
+    check(paper_for_film(catalog, "kodak_tri_x_400", "kodak_supra_endura", fallback) == "ilford_multigrade_iv_rc",
+          "a black-and-white film kept a colour paper");
+    check(paper_for_film(catalog, "kodak_portra_400", "ilford_multigrade_iv_rc", fallback) == "kodak_portra_endura",
+          "a colour film kept the silver paper");
+    check(paper_for_film(catalog, "kodak_ektachrome_100", "ilford_multigrade_iv_rc", fallback) == fallback,
+          "a slide on the silver paper did not fall back to the default paper");
+    // Groups in macOS order: positives, negatives, then black and white;
+    // papers still then cine.
+    const auto names = [](const StockGroup& group) {
+        std::vector<std::string> ids;
+        for (const Stock* s : group.stocks) ids.push_back(s->id);
+        return ids;
+    };
+    const auto films = film_groups(catalog);
+    check(films.size() == 3 && films[0].key == "positive" && films[1].key == "negative" &&
+          films[2].key == "blackAndWhite", "film group keys or order");
+    check(names(films[0]) == std::vector<std::string>{"kodak_ektachrome_100"} &&
+          names(films[1]) == std::vector<std::string>{"kodak_ektar_100", "kodak_portra_400"} &&
+          names(films[2]) == std::vector<std::string>{"kodak_tri_x_400"}, "film groups' members or order");
+    Catalog colour = catalog;
+    colour.films.pop_back();
+    check(film_groups(colour).size() == 2, "a catalogue without black and white drew an empty group");
+    const auto papers = paper_groups(catalog);
+    check(papers.size() == 2 && papers[0].key == "still" && papers[1].key == "cine" &&
+          names(papers[0]) == std::vector<std::string>{"ilford_multigrade_iv_rc", "kodak_portra_endura",
+                                                       "kodak_supra_endura"} &&
+          names(papers[1]) == std::vector<std::string>{"kodak_2383"}, "paper groups");
+    check(own_grain("kodak_tri_x_400") == 1.70 && own_grain("ilford_hp5_plus_400") == 1.49 &&
+          own_grain("kodak_tmax_100") == 0.74 && own_grain("fujifilm_neopan_acros_100_ii") == 0.64 &&
+          own_grain("kodak_portra_400") == 1.0, "own grain differs from macOS FilmParams.ownGrain");
+}
+
+// What the settings put on the wire (wire_params), rule by rule.
+void wire_rules() {
+    const auto catalog = test_catalog();
+    const RenderSettings base;
+    const Json plain = wire_params(base, catalog);
+    // A colour negative: every wire row as it is, no product row, no pack.
+    std::size_t wire_rows = 0;
+    for (const auto& field : setting_fields()) {
+        if (!field.wire) {
+            check(!plain.has(field.key), "a product row was sent");
+            continue;
+        }
+        ++wire_rows;
+        check(same_json(plain.at(field.key), json_of(base.get(field.key))), "a colour negative's row was rewritten");
+    }
+    // Beyond the rows: the four values the host resolves for the film edge
+    // and the date back, empty while both are off.
+    for (const char* key : {"overscan_edge_text", "date_imprint_text", "date_imprint_data_text"})
+        check(plain.at(key).as_string().empty(), "a resolved film edge text is sent with the film edge off");
+    check(plain.at("overscan_f_number").as_double() == 0.0, "an f-number is sent with the film edge off");
+    check(plain.fields().size() == wire_rows + 4, "a colour pair carries extra fields");
+    // A slide is scanned whatever the row says; No Print Profile scans a negative.
+    RenderSettings slide = base;
+    slide.film_stock = "kodak_ektachrome_100";
+    check(wire_params(slide, catalog).at("scan_film").as_bool(), "a slide film is printed");
+    RenderSettings scanned = base;
+    scanned.set("scan_film", true);
+    check(wire_params(scanned, catalog).at("scan_film").as_bool(), "No Print Profile did not scan");
+    // Print Effects gates glare and pre-flash and forgets neither.
+    RenderSettings effects = base;
+    effects.set("preflash_exposure", 0.02);
+    check(wire_params(effects, catalog).at("preflash_exposure").as_double() == 0.02 &&
+          wire_params(effects, catalog).at("glare_active").as_bool(), "pre-flash or glare not sent");
+    effects.set("print_effects", false);
+    const Json gated = wire_params(effects, catalog);
+    check(!gated.at("glare_active").as_bool() && gated.at("preflash_exposure").as_double() == 0.0,
+          "Print Effects off still sends glare or pre-flash");
+    check(effects.glare_active && effects.get("preflash_exposure") == SettingValue(0.02),
+          "Print Effects off forgot glare or pre-flash");
+    // ...and the Tone Mask (Params.swift:763), whose settings it keeps too.
+    RenderSettings masked = base;
+    masked.set("contrast_mask_active", true);
+    check(wire_params(masked, catalog).at("contrast_mask_active").as_bool(), "the tone mask is not sent");
+    masked.set("print_effects", false);
+    check(!wire_params(masked, catalog).at("contrast_mask_active").as_bool() &&
+          std::get<bool>(masked.get("contrast_mask_active")), "Print Effects off sent the tone mask, or forgot it");
+    // Black and white: one grain layer, the film's own grain, and on the
+    // silver paper Multigrade filter 2 as the neutral pack.
+    RenderSettings silver = base;
+    silver.film_stock = "kodak_tri_x_400";
+    silver.print_stock = "ilford_multigrade_iv_rc";
+    const Json bw = wire_params(silver, catalog);
+    check(!bw.at("grain_sublayers_active").as_bool() && std::get<bool>(silver.get("grain_sublayers_active")),
+          "grain sub-layers sent on a black-and-white film");
+    check(std::abs(bw.at("grain_amount").as_double() - 1.70) < 1e-12, "black-and-white grain is not the film's own");
+    check(bw.at("c_filter_neutral").as_double() == 0.0 && bw.at("m_filter_neutral").as_double() == 0.0 &&
+          bw.at("y_filter_neutral").as_double() == 68.0 && bw.fields().size() == wire_rows + 4 + 3,
+          "silver pair lacks Multigrade filter 2");
+    silver.grain_amount = 1.5;  // x1.70 is past the wire's 2
+    check(wire_params(silver, catalog).at("grain_amount").as_double() == 2.0, "grain amount escaped its range");
+    // The pack only on the silver paper: a black-and-white film anywhere else
+    // (which the controller refuses) or a colour film carries none.
+    silver.print_stock = "kodak_supra_endura";
+    check(!wire_params(silver, catalog).has("m_filter_neutral"), "silver pack sent for a colour paper");
+    // A stock the catalogue does not know is a colour negative.
+    RenderSettings unknown = base;
+    unknown.film_stock = "kodak_vision3_500t";
+    check(!wire_params(unknown, catalog).at("scan_film").as_bool(), "an unknown film was scanned");
+}
+
+// Film Edge and Date Back, rule by rule, each against its macOS source
+// (Model/FilmEdge.swift, Model/Session+FilmEdge.swift). No engine: the wire
+// these produce is held by the engine in --settings-engine.
+void film_edge_rules() {
+    const auto catalog = test_catalog();
+    // The Format menu, in the Mac's order, with its gates.
+    std::vector<std::string> ids;
+    for (const auto& f : film_formats()) ids.push_back(f.id);
+    check(ids == std::vector<std::string>{"135", "135_half", "120_645", "120_6x6", "120_6x7", "120_6x8", "120_6x9",
+                                          "135_xpan", "120_6x12", "120_6x17"}, "film formats or their order");
+    check(film_format("120_6x7")->long_mm == 69.5 && film_format("135_half")->short_mm == 18 &&
+          film_format("135_xpan")->perforated && !film_format("135_xpan")->has_date_back &&
+          film_format("120_645")->prints_in_margin && !film_format("135")->prints_in_margin && !film_format("nope"),
+          "film format table");
+    // The stock's edge print: the film's own words, else the name in capitals.
+    check(edge_text(catalog, "kodak_gold_200", "135") == "KODAK GB 200-7" &&
+          edge_text(catalog, "kodak_gold_200", "120") == "KODAK 200" &&
+          edge_text(catalog, "kodak_portra_400", "135") == "PORTRA 400" && edge_text(catalog, "nope", "135").empty(),
+          "edge print");
+    // The date as a back writes it, and the data line after the F6.
+    spk::io::ShootingData shot;
+    check(date_text(shot, "japan").empty() && data_text(shot).empty(), "a frame without EXIF printed something");
+    shot.year = 2026; shot.month = 10; shot.day = 1;
+    check(date_text(shot, "japan") == "'26 10 1" && date_text(shot, "us") == "10 1 '26", "date orders");
+    shot.year = 2009;
+    check(date_text(shot, "japan") == "'09 10 1", "two-digit year");
+    shot.exposure_time = 1.0 / 250; shot.f_number = 5.6; shot.exposure_program = 3;
+    shot.has_bias = true; shot.exposure_bias = 0.33; shot.focal_35mm = 24;
+    check(data_text(shot) == "1/250 F5.6 A +0.3 24mm", "the data line");
+    shot.exposure_time = 2.0; shot.f_number = 11; shot.exposure_bias = 0.04; shot.exposure_program = 7;
+    check(data_text(shot) == "2s F11 24mm", "seconds, a whole f-number, no zero bias, no scene-program letter");
+    shot.exposure_time = 1.0 / 8000; shot.f_number = 1.4; shot.exposure_program = 1; shot.exposure_bias = -1.7;
+    shot.focal_35mm = 105;
+    check(data_text(shot) == "1/8000 F1.4 M -1.7", "a line past 22 drops from the right");
+    // The date back's camera and what it prints.
+    RenderSettings s;
+    PhotoInfo photo;
+    photo.decode_width = 6000; photo.decode_height = 4000;
+    check(date_back_camera(s, photo)->id == "135", "35 mm on a 3:2 frame is not 135");
+    s.film_format_mm = 24; photo.decode_width = 4000; photo.decode_height = 3000;
+    check(date_back_camera(s, photo)->id == "135_half", "24 mm on 4:3 is not half frame");
+    s.film_format_mm = 56; photo.decode_width = 5600; photo.decode_height = 4150;
+    check(date_back_camera(s, photo)->id == "120_645", "56 mm on 1.35 is not 645");
+    for (const char* face : {"lcd", "dots", "data"})
+        check(!date_back_prints(s, photo, face), "a 645 back printed without the film edge");
+    photo.decode_height = 5600;
+    check(!date_back_camera(s, photo), "a 6x6 Film Format found a date back");
+    s.set("overscan_active", true);
+    s.set("overscan_format", std::string("120_6x7"));
+    check(date_back_camera(s, photo)->id == "120_6x7" && date_back_prints(s, photo, "dots"), "the film edge's camera");
+    s.set("overscan_format", std::string("135_xpan"));
+    check(!date_back_prints(s, photo, "lcd"), "a panoramic camera printed a date");
+    RenderSettings d;
+    photo = PhotoInfo{};
+    d.set("date_imprint_active", true);
+    check(date_back_effective(d, photo) && !cuts_frame(d, photo), "a date in the bare frame");
+    d.set("date_imprint_style", std::string("data"));
+    check(!date_back_effective(d, photo), "the data face printed without a film edge");
+    d.set("date_imprint_style", std::string("lcd"));
+    d.set("date_imprint_placement", std::string("rebate"));
+    check(!date_back_effective(d, photo), "between frames printed without a film edge");
+    d.set("overscan_active", true);
+    check(date_back_effective(d, photo) && cuts_frame(d, photo), "between frames with the film edge");
+    d.set("overscan_active", false);
+    d.set("date_imprint_placement", std::string("frame"));
+    photo.geometry.w = 0.5;
+    check(cuts_frame(d, photo), "the date alone on a cropped frame does not cut it");
+    // What they put on the wire.
+    {
+        RenderSettings e;
+        e.set("overscan_active", true);
+        e.set("overscan_frame_number", 7.0);
+        PhotoInfo p;
+        p.shooting.f_number = 2.8;
+        p.shooting.year = 2026; p.shooting.month = 10; p.shooting.day = 16;
+        const Json w = wire_params(e, catalog, &p);
+        check(w.at("overscan_edge_text").as_string() == "PORTRA 400" && w.at("overscan_f_number").as_double() == 2.8 &&
+              w.at("overscan_frame_number").as_double() == 7.0 && !w.at("date_imprint_active").as_bool(),
+              "film edge wire");
+        e.set("date_imprint_active", true);
+        e.set("date_imprint_placement", std::string("rebate"));
+        e.set("date_back_with_data", true);
+        p.shooting.exposure_time = 1.0 / 60;
+        Json w2 = wire_params(e, catalog, &p);
+        check(w2.at("date_imprint_active").as_bool() && w2.at("date_imprint_text").as_string() == "'26 10 16" &&
+              w2.at("date_imprint_data_text").as_string() == "1/60 F2.8", "date with the shooting data");
+        e.set("date_back_text_source", std::string("typed"));
+        e.set("date_back_custom_text", std::string("HELLO 1"));
+        e.set("date_back_order", std::string("us"));
+        check(wire_params(e, catalog, &p).at("date_imprint_text").as_string() == "HELLO 1", "typed text");
+        e.set("date_back_text_source", std::string("exif"));
+        check(wire_params(e, catalog, &p).at("date_imprint_text").as_string() == "10 16 '26", "the US order");
+        // The date alone on a frame cropped to half its width: the cut's own
+        // long edge is the film format, and the date keeps its size in it.
+        RenderSettings a;
+        a.set("date_imprint_active", true);
+        PhotoInfo q;
+        q.decode_width = 6000; q.decode_height = 4000;
+        q.geometry.w = 0.5;
+        const Json w3 = wire_params(a, catalog, &q);
+        check(std::abs(w3.at("film_format_mm").as_double() - 35.0 * 4000 / 6000) < 1e-9 &&
+              std::abs(w3.at("date_imprint_size").as_double() - std::max(0.4, 35.0 * 4000 / 6000 / 36)) < 1e-9 &&
+              std::abs(w3.at("date_imprint_inset_x").as_double() - 3.0 * 35.0 * 4000 / 6000 / 36) < 1e-9 &&
+              w3.at("overscan_format").as_string() == "135", "the date on a cut frame");
+    }
+    // The crop held by the gate.
+    {
+        RenderSettings g;
+        g.set("overscan_active", true);
+        EngineCut whole;
+        check(gate_shaped(whole, g, 6000, 4000) && !gate_shaped(whole, g, 6000, 4500), "135 gate shape");
+        g.set("overscan_format", std::string("120_6x6"));
+        const EngineCut square = gate_framed(whole, g, 6000, 4000);
+        check(std::abs(square.w * 6000 - 4000) < 1e-6 && std::abs(square.h - 1.0) < 1e-12 &&
+              std::abs(square.x - 1.0 / 6) < 1e-12 && square.y == 0 && gate_shaped(square, g, 6000, 4000),
+              "the 6x6 gate does not fit the frame about its centre");
+        g.set("overscan_format", std::string("135"));
+        const EngineCut upright = gate_framed(whole, g, 6000, 4000, 0);
+        check(std::abs((upright.w * 6000) / (upright.h * 4000) - 2.0 / 3) < 1e-9 && gate_shaped(upright, g, 6000, 4000) &&
+              std::abs(gate_ratio(g, false) - 2.0 / 3) < 1e-12, "the gate turned upright");
+        EngineCut small;
+        small.x = 0.9; small.y = 0.9; small.w = 0.1; small.h = 0.05;
+        const EngineCut kept = gate_framed(small, g, 6000, 4000);
+        check(kept.x + kept.w <= 1.0 + 1e-12 && kept.y + kept.h <= 1.0 + 1e-12 && gate_shaped(kept, g, 6000, 4000),
+              "a held crop left the frame");
+        std::uint32_t cw = 0, ch = 0;
+        EngineCut turned;
+        turned.w = 0.5; turned.quarter_turns = 1;
+        cut_size(turned, 6000, 4000, cw, ch);
+        check(cw == 4000 && ch == 3000 && !turned.identity() && whole.identity(), "the cut's size after a turn");
+    }
+    // Sync keeps the recipient's film edge and date back.
+    {
+        RenderSettings from, to;
+        from.set("overscan_active", true);
+        from.set("date_imprint_active", true);
+        from.set("date_back_custom_text", std::string("FROM"));
+        from.grain_active = false;
+        to.set("overscan_frame_seed", 77.0);
+        const RenderSettings synced = synced_settings(from, to);
+        check(!synced.grain_active && !std::get<bool>(synced.get("overscan_active")) &&
+              !std::get<bool>(synced.get("date_imprint_active")) &&
+              std::get<std::string>(synced.get("date_back_custom_text")).empty() &&
+              synced.get("overscan_frame_seed") == SettingValue(77.0), "sync copied a film edge or date back");
+        check(per_photo_setting("overscan_fog") && per_photo_setting("date_back_order") &&
+              per_photo_setting("film_edge_seeded") && !per_photo_setting("grain_amount"), "per-photo rows");
+    }
+    // A frame's seeds.
+    {
+        RenderSettings f;
+        seed_film_edge(f, "E:/Photos/DSC_0001.NEF", 0, 123);
+        check(f.get("overscan_frame_seed") == SettingValue(double(frame_seed_for("E:/Photos/DSC_0001.NEF"))) &&
+              f.get("overscan_camera_seed") == SettingValue(123.0) && f.get("overscan_frame_number") == SettingValue(1.0) &&
+              std::get<bool>(f.get("film_edge_seeded")) && validate_settings(f, catalog) == false, "seeding");
+        seed_film_edge(f, "E:/Photos/DSC_0001.NEF", 98, 5);
+        check(f.get("overscan_frame_number") == SettingValue(99.0), "frame 99");
+        seed_film_edge(f, "E:/Photos/DSC_0001.NEF", 99, 5);
+        check(f.get("overscan_frame_number") == SettingValue(1.0), "the roll after 99");
+        seed_film_edge(f, "E:/Photos/DSC_0001.NEF", -1, 5);
+        check(f.get("overscan_frame_number") == SettingValue(0.0), "a frame opened alone");
+        check(frame_seed_for("E:\\Photos\\dsc_0001.nef") == frame_seed_for("E:/Photos/DSC_0001.NEF") &&
+              frame_seed_for("E:/Photos/DSC_0002.NEF") != frame_seed_for("E:/Photos/DSC_0001.NEF") &&
+              frame_seed_for("x") <= 0x7FFFFFFFu, "frame seeds");
+    }
+}
+
+void settings_deltas() {
+    const auto catalog = test_catalog();
+    const RenderSettings base;
+    // Opening sends the host's I/O policy and wire_params: every wire row.
+    const auto open = opening_params(base, catalog);
+    std::size_t wire_rows = 0;
+    for (const auto& field : setting_fields()) {
+        if (!field.wire) continue;
+        ++wire_rows;
+        check(same_json(open.at(field.key), json_of(base.get(field.key))), "opening parameters omit or alter a row");
+    }
+    check(!open.at("scan_film").as_bool() && open.at("output_color_space").as_string() == "sRGB" &&
+          open.at("input_color_space").as_string() == "ProPhoto RGB" && !open.at("extended_dynamic_range").as_bool(),
+          "opening parameters lost the host's fixed policy");
+    // SpektraLab's defaults, as macOS asks for them (Session.swift openDelta):
+    // without them Film Exposure barely moves the print.
+    check(open.at("product_defaults").as_bool(false), "opening parameters do not ask for the product defaults");
+    check(open.fields().size() == wire_rows + 5 + 5, "opening parameters carry an unexpected field");
+    RenderSettings slide_open = base;
+    slide_open.film_stock = "kodak_ektachrome_100";
+    check(opening_params(slide_open, catalog).at("scan_film").as_bool(), "a slide opened printed");
+    // The request is the host's option; it is not what a frame is tagged
+    // with (output_encoding reads the reply, below and in --settings-engine).
+    check(opening_params(base, catalog, "ProPhoto RGB").at("output_color_space").as_string() == "ProPhoto RGB" &&
+          opening_params(base, catalog, "ProPhoto RGB").at("output_cctf_encoding").as_bool(),
+          "requested output colour space not passed through");
+
+    // The open reply's resolved encoding, and refusals for a reply that does
+    // not say: a frame must never be tagged from a default.
+    const auto reply = [](const char* text) {
+        Json value;
+        std::string error;
+        if (!Json::parse(text, value, error)) throw std::runtime_error("test reply: " + error);
+        return value;
+    };
+    check(output_encoding(reply(R"({"params":{"output_color_space":"ProPhoto RGB","output_cctf_encoding":true}})")) ==
+              OutputEncoding{"ProPhoto RGB", true}, "resolved encoding not read from the reply");
+    check(output_encoding(reply(R"({"params":{"output_color_space":"sRGB","output_cctf_encoding":false}})")) ==
+              OutputEncoding{"sRGB", false}, "linear output not read from the reply");
+    check(OutputEncoding{"sRGB", true}.is_encoded_srgb() && !OutputEncoding{"sRGB", false}.is_encoded_srgb() &&
+          !OutputEncoding{"Display P3", true}.is_encoded_srgb(), "encoded-sRGB test is wrong");
+    for (const char* bad : {R"({})", R"({"params":{}})", R"({"params":[]})",
+                            R"({"params":{"output_cctf_encoding":true}})",
+                            R"({"params":{"output_color_space":"","output_cctf_encoding":true}})",
+                            R"({"params":{"output_color_space":3,"output_cctf_encoding":true}})",
+                            R"({"params":{"output_color_space":"sRGB"}})",
+                            R"({"params":{"output_color_space":"sRGB","output_cctf_encoding":1}})",
+                            R"({"output_color_space":"sRGB","output_cctf_encoding":true})"})
+        rejected([&] { output_encoding(reply(bad)); }, "open reply without a resolved encoding accepted");
+
+    check(changed_params(base, base, catalog).fields().empty(), "unchanged settings produced a delta");
+    // Each wire row alone produces exactly its own key; a film change also
+    // carries the resolved scan mode. A product row produces the wire values
+    // it changes: Print Effects off turns glare off (pre-flash is at 0, the
+    // Tone Mask is off); the white balance and the placement's UI state
+    // change none -- the white balance is the decode (render re-opens).
+    for (const auto& field : setting_fields()) {
+        RenderSettings after = base;
+        SettingValue value;
+        switch (field.type) {
+        case SettingType::boolean: value = !std::get<bool>(base.get(field.key)); break;
+        case SettingType::number: value = std::get<double>(base.get(field.key)) == field.high ? field.low : field.high; break;
+        case SettingType::text:
+            value = field.key == "film_stock" ? std::string("kodak_ektar_100")
+                  : field.key == "print_stock" ? std::string("kodak_portra_endura")
+                  : field.choices == SettingChoices::free ? std::string("'26 10 1") : field.listed.back();
+            break;
+        }
+        after.set(field.key, value);
+        const auto delta = changed_params(base, after, catalog);
+        if (after == base) {  // a one-choice row (contrast_mask_scheme) cannot change
+            check(delta.fields().empty(), "an unchanged row produced a delta");
+            continue;
+        }
+        // A product row produces the wire values it changes: Print Effects
+        // off turns glare off (pre-flash is at 0); the Date Back's change
+        // nothing while it is off. The film edge switched on brings the
+        // stock's edge print with it (the f-number stays 0 without EXIF).
+        std::vector<std::string> expected;
+        if (field.wire) expected.push_back(field.key);
+        else if (field.key == "print_effects") expected.push_back("glare_active");
+        if (field.key == "overscan_active") expected.push_back("overscan_edge_text");
+        if (field.key == "film_stock") expected.push_back("scan_film");
+        std::sort(expected.begin(), expected.end());
+        if (keys_of(delta) != expected) throw std::runtime_error("delta is not minimal for " + field.key);
+        if (field.wire) check(same_json(delta.at(field.key), json_of(value)), "delta carries the wrong value");
+        if (field.key == "film_stock") check(!delta.at("scan_film").as_bool(), "film delta lost scan mode");
+    }
+    // A paper-only edit never touches the film side, whose cached grain
+    // realisation it would otherwise invalidate.
+    RenderSettings print = base;
+    print.print_exposure = 0.8;
+    print.y_filter_shift = 0.25;
+    print.set("filter_shift_scale", 1.0);
+    print.set("preflash_exposure", 0.01);
+    print.print_stock = "kodak_portra_endura";
+    const auto print_delta = changed_params(base, print, catalog);
+    check(keys_of(print_delta) == std::vector<std::string>{"filter_shift_scale", "preflash_exposure", "print_exposure",
+                                                             "print_stock", "y_filter_shift"},
+          "paper edit delta is not minimal");
+    for (const auto& key : keys_of(print_delta))
+        check(find_setting(key)->layer == SettingLayer::print, "paper edit delta touched the film side");
+    // Print Effects off then on: the gated values leave the wire and return.
+    RenderSettings plain = print;
+    plain.set("print_effects", false);
+    const auto gate = changed_params(print, plain, catalog);
+    check(keys_of(gate) == std::vector<std::string>{"glare_active", "preflash_exposure"} &&
+          !gate.at("glare_active").as_bool() && gate.at("preflash_exposure").as_double() == 0.0,
+          "Print Effects off delta");
+    const auto ungate = changed_params(plain, print, catalog);
+    check(keys_of(ungate) == keys_of(gate) && ungate.at("preflash_exposure").as_double() == 0.01,
+          "Print Effects on did not restore pre-flash");
+    // Slide and back: the scan mode follows every film change, and the
+    // remembered paper rides along only when it changed.
+    RenderSettings slide = print;
+    slide.film_stock = "kodak_ektachrome_100";
+    const auto to_slide = changed_params(print, slide, catalog);
+    check(keys_of(to_slide) == std::vector<std::string>{"film_stock", "scan_film"} &&
+          to_slide.at("scan_film").as_bool(), "slide change delta");
+    RenderSettings negative = slide;
+    negative.film_stock = "kodak_portra_400";
+    negative.set("auto_exposure_method", std::string("center_weighted"));
+    const auto back = changed_params(slide, negative, catalog);
+    check(keys_of(back) == std::vector<std::string>{"auto_exposure_method", "film_stock", "scan_film"} &&
+          !back.at("scan_film").as_bool(), "negative return delta");
+    // Into black and white: the derived values ride with the stocks; out of
+    // it, they return and the pack is left to the engine's own table.
+    RenderSettings silver = base;
+    silver.film_stock = "kodak_tri_x_400";
+    silver.print_stock = "ilford_multigrade_iv_rc";
+    const auto to_silver = changed_params(base, silver, catalog);
+    check(keys_of(to_silver) == std::vector<std::string>{"c_filter_neutral", "film_stock", "grain_amount",
+                                                           "grain_sublayers_active", "m_filter_neutral", "print_stock",
+                                                           "scan_film", "y_filter_neutral"},
+          "black-and-white change delta");
+    const auto from_silver = changed_params(silver, base, catalog);
+    check(keys_of(from_silver) == std::vector<std::string>{"film_stock", "grain_amount", "grain_sublayers_active",
+                                                             "print_stock", "scan_film"} &&
+          from_silver.at("grain_amount").as_double() == 1.0 && from_silver.at("grain_sublayers_active").as_bool(),
+          "colour return delta");
 }
 
 void conversion() {
@@ -476,6 +1087,455 @@ void film_policy(const fs::path& resources, const fs::path& raw, const fs::path&
     check(bool(stream << report.dump() << '\n') && bool(stream.flush()), "cannot write film policy report");
 }
 
+// The settings table through the real engine, on a synthetic frame: no RAW
+// needed. Grain and glare are off, so equal settings must give equal pixels.
+struct Rendered {
+    spk_result result{};
+    Rendered() = default;
+    Rendered(const Rendered&) = delete;
+    Rendered& operator=(const Rendered&) = delete;
+    ~Rendered() { spk_result_free(&result); }
+    std::uint64_t pixels() const {
+        std::uint64_t hash = 14695981039346656037ull;
+        for (std::uint32_t y = 0; y < result.height; ++y)
+            hash = fingerprint(result.rgba16 + std::size_t(y) * result.row_stride_px * 4,
+                               std::size_t(result.width) * 4 * sizeof(std::uint16_t), hash);
+        return hash;
+    }
+    double distance(const Rendered& other) const {
+        check(result.width == other.result.width && result.height == other.result.height, "render size changed");
+        double sum = 0.0;
+        for (std::uint32_t y = 0; y < result.height; ++y)
+            for (std::uint32_t x = 0; x < result.width * 4; ++x)
+                sum += std::abs(double(result.rgba16[std::size_t(y) * result.row_stride_px * 4 + x]) -
+                                double(other.result.rgba16[std::size_t(y) * other.result.row_stride_px * 4 + x]));
+        return sum;
+    }
+    // The largest |R-G| or |B-G| over the frame, as a fraction of full scale:
+    // 0 for a print with no colour anywhere.
+    double channel_spread() const {
+        int worst = 0;
+        for (std::uint32_t y = 0; y < result.height; ++y)
+            for (std::uint32_t x = 0; x < result.width; ++x) {
+                const auto* p = result.rgba16 + (std::size_t(y) * result.row_stride_px + x) * 4;
+                worst = std::max({worst, std::abs(int(p[0]) - int(p[1])), std::abs(int(p[2]) - int(p[1]))});
+            }
+        return worst / 65535.0;
+    }
+    // Mean of the green channel, as a fraction of full scale.
+    double mean_green() const {
+        double sum = 0.0;
+        for (std::uint32_t y = 0; y < result.height; ++y)
+            for (std::uint32_t x = 0; x < result.width; ++x)
+                sum += result.rgba16[(std::size_t(y) * result.row_stride_px + x) * 4 + 1];
+        return sum / (double(result.width) * result.height * 65535.0);
+    }
+};
+
+// The catalogue the build deploys: spektrafilm's stocks and the product's own
+// black-and-white films and silver paper, with the metadata macOS lists them by.
+void real_catalogue(const Catalog& catalog) {
+    const std::array<std::string, 4> silver_films{
+        "kodak_tri_x_400", "kodak_tmax_100", "fujifilm_neopan_acros_100_ii", "ilford_hp5_plus_400"};
+    for (const auto& id : silver_films) {
+        const Stock* film = catalog.film(id);
+        if (!film) throw std::runtime_error("deployed resources lack the black-and-white film " + id);
+        check(film->is_monochrome && !film->is_positive && !film->is_cine &&
+              film->target_print == "ilford_multigrade_iv_rc", "black-and-white film metadata");
+    }
+    const Stock* multigrade = catalog.paper("ilford_multigrade_iv_rc");
+    check(multigrade && multigrade->is_monochrome && !multigrade->is_cine && multigrade->target_print.empty(),
+          "deployed resources lack the silver paper");
+    const Stock* portra = catalog.film("kodak_portra_400");
+    const Stock* vision = catalog.film("kodak_vision3_500t");
+    const Stock* provia = catalog.film("fujifilm_provia_100f");
+    check(portra && !portra->is_monochrome && portra->target_print == "kodak_portra_endura" &&
+          vision && vision->is_cine && vision->target_print == "kodak_2383" &&
+          provia && provia->is_positive && provia->target_print.empty() &&
+          catalog.paper("kodak_2383") && catalog.paper("kodak_2383")->is_cine, "colour stock metadata");
+    // macOS's catalogue: 24 films and 9 papers (StockCatalog.json).
+    check(catalog.films.size() == 24 && catalog.papers.size() == 9, "deployed catalogue size");
+    for (const Stock& film : catalog.films)
+        check(film.is_positive ? film.target_print.empty() : catalog.paper(film.target_print) != nullptr,
+              "a negative names a paper the catalogue lacks, or a slide names one");
+    const auto films = film_groups(catalog);
+    check(films.size() == 3 && films[2].key == "blackAndWhite" && films[2].stocks.size() == silver_films.size() &&
+          films[0].stocks.size() == 4 && films[1].stocks.size() == 16, "deployed film groups");
+    for (const Stock* s : films[1].stocks) check(!s->is_monochrome && !s->is_positive, "a negative group member");
+    // Within a group, stills before cine.
+    bool cine = false;
+    for (const Stock* s : films[1].stocks) {
+        check(!cine || s->is_cine, "a still film follows a cine film");
+        cine = cine || s->is_cine;
+    }
+    const auto papers = paper_groups(catalog);
+    check(papers[0].stocks.size() == 7 && papers[1].stocks.size() == 2 &&
+          std::any_of(papers[0].stocks.begin(), papers[0].stocks.end(),
+                      [](const Stock* s) { return s->id == "ilford_multigrade_iv_rc"; }), "deployed paper groups");
+}
+
+void settings_engine(const fs::path& resources) {
+    using EnginePtr = std::unique_ptr<spk_engine, decltype(&spk_engine_destroy)>;
+    using SessionPtr = std::unique_ptr<spk_session, decltype(&spk_session_release)>;
+    const auto catalog = read_catalog(resources);
+    real_catalogue(catalog);
+    const auto root = path_text(fs::absolute(resources));
+    EnginePtr engine(spk_engine_create(root.c_str(), nullptr), &spk_engine_destroy);
+    if (!engine) throw std::runtime_error(std::string("engine: ") + spk_last_error(nullptr));
+    const auto error = [&] { return std::string(spk_last_error(engine.get())); };
+    // A smooth, non-uniform frame, so the metering intents disagree.
+    constexpr std::uint32_t width = 96, height = 64;
+    std::vector<float> rgb(std::size_t(width) * height * 3);
+    for (std::uint32_t y = 0; y < height; ++y)
+        for (std::uint32_t x = 0; x < width; ++x) {
+            float* p = rgb.data() + (std::size_t(y) * width + x) * 3;
+            p[0] = 0.01f + 0.9f * float(x) / (width - 1);
+            p[1] = 0.01f + 0.5f * float(y) / (height - 1);
+            p[2] = 0.03f + 0.3f * float(x + y) / (width + height - 2);
+        }
+    const spk_image input{rgb.data(), width, height, 3};
+    RenderSettings current;
+    current.grain_active = false;
+    current.glare_active = false;
+    const auto open = [&](const RenderSettings& settings) {
+        SessionPtr s(spk_open(engine.get(), &input, opening_params(settings, catalog).dump().c_str(), nullptr),
+                     &spk_session_release);
+        if (!s) throw std::runtime_error("open " + settings.film_stock + " on " + settings.print_stock + ": " + error());
+        return s;
+    };
+    const auto session_params = [&](spk_session* s) {
+        char* text = nullptr;
+        check(spk_get_params(s, &text) == SPK_OK && text, "read session parameters");
+        Json params;
+        std::string parse_error;
+        const bool parsed = Json::parse(text, params, parse_error);
+        spk_string_free(text);
+        check(parsed, "session parameters are not JSON");
+        return params;
+    };
+    SessionPtr session = open(current);
+    // The session holds exactly what the table sent, macOS defaults and the
+    // product's wire rules included.
+    const auto session_matches = [&](const RenderSettings& settings) {
+        const Json params = session_params(session.get());
+        const Json wire = wire_params(settings, catalog);
+        for (const auto& [key, value] : wire.fields())
+            if (!same_json(params.at(key), value))
+                throw std::runtime_error("session does not hold the table's " + key + ": " + params.at(key).dump());
+        return params;
+    };
+    session_matches(current);
+    Rendered opened;
+    check(spk_render(session.get(), "full", &opened.result) == SPK_OK, "first render");
+    // Film Exposure moves the finished print, as on macOS (product_defaults
+    // in the open): a stop over prints clearly brighter, where the reference
+    // re-times the enlarger and holds the mid-grey (AGENTS.md trap 30).
+    {
+        RenderSettings exposed = current;
+        exposed.film_exposure_ev = 1.0;
+        SessionPtr over = open(exposed);
+        Rendered up;
+        check(spk_render(over.get(), "full", &up.result) == SPK_OK, "render a stop over");
+        std::cout << "film exposure +1 EV: mean green " << opened.mean_green() << " -> " << up.mean_green() << '\n';
+        check(up.mean_green() > opened.mean_green() * 1.15, "Film Exposure +1 EV did not brighten the print");
+    }
+
+    // What a frame is tagged with comes from the engine's reply: the
+    // desktop's sRGB request, a ProPhoto request, and no request at all --
+    // where only the engine knows the answer (its RFC-018 default).
+    const auto resolved = [&](const Json& params) {
+        char* text = nullptr;
+        SessionPtr probe(spk_open(engine.get(), &input, params.dump().c_str(), &text), &spk_session_release);
+        const std::unique_ptr<char, decltype(&spk_string_free)> owner(text, &spk_string_free);
+        if (!probe || !text) throw std::runtime_error("open for the encoding probe: " + error());
+        Json reply;
+        std::string parse_error;
+        check(Json::parse(text, reply, parse_error), "open reply is not JSON");
+        return output_encoding(reply);
+    };
+    check(resolved(opening_params(current, catalog)) == OutputEncoding{"sRGB", true},
+          "the desktop's sRGB session reports another encoding");
+    check(resolved(opening_params(current, catalog, "ProPhoto RGB")) == OutputEncoding{"ProPhoto RGB", true},
+          "a ProPhoto session reports another encoding");
+    Json unrequested = Json::object();
+    const Json requested = opening_params(current, catalog);
+    for (const auto& kv : requested.fields())
+        if (kv.first != "output_color_space" && kv.first != "output_cctf_encoding") unrequested.set(kv.first, kv.second);
+    const auto engine_default = resolved(unrequested);
+    check(engine_default == OutputEncoding{spk::Params{}.io.output_color_space, true} &&
+          engine_default.color_space != kDisplayOutputColorSpace,
+          "an unrequested output space did not come back as the engine's own default");
+
+    const auto edit = [&](const RenderSettings& next, bool expect_cached) {
+        const auto delta = changed_params(current, next, catalog);
+        check(!delta.fields().empty(), "edit produced no delta");
+        if (spk_set_params(session.get(), delta.dump().c_str(), nullptr) != SPK_OK)
+            throw std::runtime_error("apply " + delta.dump() + ": " + error());
+        auto out = std::make_unique<Rendered>();
+        check(spk_reprint(session.get(), "full", &out->result) == SPK_OK, "reprint after edit");
+        check((out->result.negative_was_cached != 0) == expect_cached, "edit used the wrong film-cache path");
+        current = next;
+        session_matches(current);
+        return out;
+    };
+
+    auto next = current;
+    next.print_exposure = 0.8;
+    const auto brighter = edit(next, true);
+    check(brighter->pixels() != opened.pixels(), "print exposure did not change the print");
+    // The scale multiplies the shifts and nothing else: at zero shifts the
+    // engine's 1 and macOS's 40 print identically. This is why a version-1
+    // edit with both shifts at zero can take the new strength unchanged.
+    next.set("filter_shift_scale", 1.0);
+    const auto unscaled = edit(next, true);
+    check(unscaled->pixels() == brighter->pixels(), "filter scale moved a print with zero shifts");
+    next.y_filter_shift = 0.25;
+    const auto weak = edit(next, true);
+    next.set("filter_shift_scale", 40.0);
+    const auto strong = edit(next, true);
+    check(strong->distance(*unscaled) > 4.0 * weak->distance(*unscaled) && strong->distance(*unscaled) > 0,
+          "filter_shift_scale 40 does not strengthen the yellow filter");
+    next.set("auto_exposure_method", std::string("center_weighted"));
+    const auto metered = edit(next, false);
+    check(metered->pixels() != strong->pixels(), "metering intent did not change the render");
+
+    // The scene's Highlights and Shadows (API-SPEC §16) re-develop. On the
+    // ramp, whose brightness rises left to right, Highlights -100 darkens the
+    // bright end and leaves the dark end nearly as it was; Shadows +100 lifts
+    // the dark end; the Scene Placement sample sees the move; both back at 0
+    // is the render before, to the bit.
+    const auto band_green = [](const Rendered& r, double x0, double x1) {
+        const auto& out = r.result;
+        const auto c0 = std::uint32_t(x0 * out.width), c1 = std::max(c0 + 1, std::uint32_t(x1 * out.width));
+        double sum = 0.0;
+        for (std::uint32_t y = 0; y < out.height; ++y)
+            for (std::uint32_t x = c0; x < c1; ++x) sum += out.rgba16[(std::size_t(y) * out.row_stride_px + x) * 4 + 1];
+        return sum / (double(c1 - c0) * out.height * 65535.0);
+    };
+    // On the Y norm, the scalar the tone itself is judged on: this ramp's red
+    // rises across it and its green down it, so its highest "power" pixels
+    // (the default norm, red-led) are the dark top-right corner, which
+    // Highlights rightly leaves alone. Asking for another norm also takes
+    // the engine's separate sampler pipeline.
+    const auto scene_p99 = [&] {
+        char* text = nullptr;
+        if (spk_scene_latitude(session.get(), "{\"norm\":\"y\"}", &text) != SPK_OK || !text)
+            throw std::runtime_error("scene latitude: " + error());
+        Json reply;
+        std::string parse_error;
+        const bool parsed = Json::parse(text, reply, parse_error);
+        spk_string_free(text);
+        check(parsed, "scene latitude reply is not JSON");
+        return reply.at("scene").at("p99").as_double();
+    };
+    const double p99_before = scene_p99();
+    next.set("scene_tone_highlights", -100.0);
+    const auto pulled = edit(next, false);
+    const double p99_pulled = scene_p99();
+    const double bright_drop = band_green(*metered, 0.85, 1.0) - band_green(*pulled, 0.85, 1.0);
+    const double dark_drop = std::abs(band_green(*metered, 0.0, 0.15) - band_green(*pulled, 0.0, 0.15));
+    std::cout << "scene tone: Highlights -100 moves the bright end by " << -bright_drop << ", the dark end by "
+              << dark_drop << "; scene p99 " << p99_before << " -> " << p99_pulled << " EV\n";
+    check(bright_drop > 0.02 && dark_drop < 0.25 * bright_drop, "Highlights -100 did not darken the bright end alone");
+    check(p99_pulled < p99_before - 0.1, "the Scene Placement sample does not see Highlights");
+    next.set("scene_tone_highlights", 0.0);
+    next.set("scene_tone_shadows", 100.0);
+    const auto lifted = edit(next, false);
+    const double dark_lift = band_green(*lifted, 0.0, 0.15) - band_green(*metered, 0.0, 0.15);
+    std::cout << "scene tone: Shadows +100 lifts the dark end by " << dark_lift << '\n';
+    check(dark_lift > 0.01, "Shadows +100 did not lift the dark end");
+    next.set("scene_tone_shadows", 0.0);
+    check(edit(next, false)->pixels() == metered->pixels(), "Highlights and Shadows back at 0 render differently");
+
+    // The rows the macOS Film and Print sections add. Print side: pre-flash
+    // reprints the cached negative, and Print Effects off prints exactly as
+    // without it (glare is already off here), on again exactly as with it.
+    next.set("preflash_exposure", 0.01);
+    const auto flashed = edit(next, true);
+    check(flashed->pixels() != metered->pixels(), "pre-flash did not change the print");
+    next.set("print_effects", false);
+    const auto plain = edit(next, true);
+    check(plain->pixels() == metered->pixels(), "Print Effects off still printed the pre-flash");
+    next.set("print_effects", true);
+    check(edit(next, true)->pixels() == flashed->pixels(), "Print Effects on lost the pre-flash");
+    // No Print Profile scans the cached negative instead of printing it.
+    next.set("scan_film", true);
+    const auto negative_scan = edit(next, true);
+    check(negative_scan->pixels() != flashed->pixels(), "No Print Profile still printed");
+    next.set("scan_film", false);
+    check(edit(next, true)->pixels() == flashed->pixels(), "No Print Profile off did not print again");
+    // Film side: each re-develops. The meter off and the couplers move this
+    // frame; scatter, highlight boost and the anti-halation layer act on
+    // highlights and edges this smooth frame barely has, so the session
+    // holding them (edit checks it) and the final fresh-open equality are
+    // their checks. Grain is off, so its model cannot move a pixel.
+    next.set("auto_exposure", false);
+    const auto unmetered = edit(next, false);
+    check(unmetered->pixels() != flashed->pixels(), "auto exposure off did not change the render");
+    next.set("dir_couplers_amount", 0.5);
+    const auto couplers = edit(next, false);
+    check(couplers->pixels() != unmetered->pixels(), "couplers amount did not change the render");
+    next.set("halation_scatter_amount", 0.5);
+    (void)edit(next, false);
+    next.set("halation_boost_ev", 2.0);
+    (void)edit(next, false);
+    next.set("antihalation_removed", true);
+    (void)edit(next, false);
+    next.set("grain_sublayers_active", false);
+    (void)edit(next, false);
+    next.set("dir_couplers_active", false);
+    (void)edit(next, false);
+
+    next.print_stock = "kodak_portra_endura";
+    (void)edit(next, true);
+    next.film_stock = "kodak_ektar_100";
+    (void)edit(next, false);
+    next.film_stock = "kodak_ektachrome_100";
+    (void)edit(next, false);
+    check(session_params(session.get()).at("scan_film").as_bool(), "a slide was printed");
+    next.film_stock = "kodak_portra_400";
+    (void)edit(next, false);
+
+    // Black and white on its paper, coming from a colour pair: the delta lands
+    // where a fresh open does (Multigrade filter 2, one grain layer), the print
+    // is neutral, and going back the engine reloads the colour pair's pack.
+    next.film_stock = "kodak_tri_x_400";
+    next.print_stock = "ilford_multigrade_iv_rc";
+    const auto silver = edit(next, false);
+    const Json silver_params = session_matches(current);
+    if (silver_params.at("y_filter_neutral").as_double() != 68.0 || silver_params.at("m_filter_neutral").as_double() != 0.0 ||
+        silver_params.at("grain_sublayers_active").as_bool())
+        throw std::runtime_error("the silver pair lacks its pack or kept sub-layer grain: M " +
+                                 silver_params.at("m_filter_neutral").dump() + " Y " +
+                                 silver_params.at("y_filter_neutral").dump());
+    {
+        SessionPtr fresh = open(current);
+        Rendered reopened;
+        check(spk_render(fresh.get(), "full", &reopened.result) == SPK_OK, "render a fresh black-and-white session");
+        check(reopened.pixels() == silver->pixels(), "a black-and-white edit differs from a fresh black-and-white open");
+    }
+    check(silver->channel_spread() < 2e-3, "a black-and-white print has colour in it");
+    next.film_stock = "kodak_portra_400";
+    next.print_stock = "kodak_supra_endura";
+    const auto colour = edit(next, false);
+    // The Pre-Dev rows. The Tone Mask is a print edit: it reprints the cached
+    // negative (API-SPEC §11) and moves the print. A resolved Scene Placement
+    // curve -- what the Fit would commit -- is a shoot edit and re-develops
+    // (API-SPEC §12); a highlight knee half a stop over the metered mid-grey
+    // reaches into this frame, which runs about two stops over it. Both are
+    // still on the session when Print Effects goes off below, and the fresh
+    // open at the end holds them to what a session opened with them renders.
+    next.set("contrast_mask_active", true);
+    next.set("contrast_mask_highlights", 1.5);
+    next.set("contrast_mask_shadows", 1.0);
+    const auto masked = edit(next, true);
+    check(masked->pixels() != colour->pixels(), "the tone mask did not change the print");
+    next.set("scene_latitude_active", true);
+    next.set("scene_latitude_highlight_knee", 0.5);
+    next.set("scene_latitude_highlight_room", 1.5);
+    const auto placed = edit(next, false);
+    check(placed->pixels() != masked->pixels(), "a scene placement curve did not change the render");
+    Json neutral_db;
+    {
+        std::ifstream file(resources / "neutral_print_filters.json", std::ios::binary);
+        std::stringstream text;
+        text << file.rdbuf();
+        std::string parse_error;
+        check(Json::parse(text.str(), neutral_db, parse_error), "read the engine's neutral filter table");
+    }
+    const Json& row = neutral_db.at("kodak_supra_endura").at("TH-KG3").at("kodak_portra_400");
+    const Json back = session_params(session.get());
+    check(row.is_array() && row.items().size() == 3 && back.at("c_filter_neutral").as_double() == row.items()[0].as_double() &&
+          back.at("m_filter_neutral").as_double() == row.items()[1].as_double() &&
+          back.at("y_filter_neutral").as_double() == row.items()[2].as_double(),
+          "leaving the silver pair kept Multigrade's pack on a colour paper");
+    // A product row away from its default is part of what a fresh open must
+    // reproduce too.
+    next.set("print_effects", false);
+    const auto last = edit(next, true);
+    // Deltas leave the session exactly where opening with the final settings
+    // would have: nothing the table holds is lost across stock changes.
+    SessionPtr fresh = open(current);
+    Rendered reopened;
+    check(spk_render(fresh.get(), "full", &reopened.result) == SPK_OK, "render reopened session");
+    check(reopened.pixels() == last->pixels(), "edited session differs from a fresh one with the same settings");
+
+    // Each black-and-white film on Multigrade IV RC at a new photograph's
+    // settings (grain and glare off, so the frame is deterministic): a print
+    // with no colour in it, and the film's own grain on the wire.
+    for (const std::string film : {"kodak_tri_x_400", "kodak_tmax_100", "fujifilm_neopan_acros_100_ii",
+                                   "ilford_hp5_plus_400"}) {
+        RenderSettings bw;
+        bw.grain_active = false;
+        bw.glare_active = false;
+        bw.film_stock = film;
+        bw.print_stock = "ilford_multigrade_iv_rc";
+        SessionPtr s = open(bw);
+        Rendered print;
+        check(spk_render(s.get(), "full", &print.result) == SPK_OK, "render a black-and-white film");
+        const Json params = session_params(s.get());
+        check(std::abs(params.at("grain_amount").as_double() - own_grain(film)) < 1e-12,
+              "a black-and-white film's grain is not its own");
+        const double spread = print.channel_spread(), mid = print.mean_green();
+        std::cout << "black and white: " << film << " on Multigrade IV RC, channel spread " << spread
+                  << ", mean " << mid << '\n';
+        check(spread < 2e-3 && mid > 0.05 && mid < 0.95, "a black-and-white print is not a neutral picture");
+    }
+
+    // Film Edge and Date Back through the table on the 3:2 frame (the 135
+    // gate's shape): the session holds what wire_params resolved, the render
+    // is the film canvas spk_overscan_geometry reports, larger than the frame,
+    // and the date changes only the print it is on.
+    {
+        RenderSettings film;
+        film.grain_active = false;
+        film.glare_active = false;
+        film.set("overscan_active", true);
+        film.set("overscan_frame_number", 12.0);
+        PhotoInfo photo;
+        photo.decode_width = width;
+        photo.decode_height = height;
+        photo.shooting.f_number = 4.0;
+        photo.shooting.year = 2026; photo.shooting.month = 10; photo.shooting.day = 16;
+        const auto open_film = [&](const RenderSettings& settings) {
+            SessionPtr s(spk_open(engine.get(), &input, opening_params(settings, catalog, kDisplayOutputColorSpace, &photo).dump().c_str(), nullptr),
+                         &spk_session_release);
+            if (!s) throw std::runtime_error("open with a film edge: " + error());
+            return s;
+        };
+        SessionPtr s = open_film(film);
+        Rendered strip;
+        check(spk_render(s.get(), "full", &strip.result) == SPK_OK, "render with a film edge");
+        const Json held = session_params(s.get());
+        const Json wire = wire_params(film, catalog, &photo);
+        for (const auto& [key, value] : wire.fields())
+            if (!same_json(held.at(key), value))
+                throw std::runtime_error("film edge session does not hold the table's " + key + ": " + held.at(key).dump());
+        check(held.at("overscan_edge_text").as_string() == edge_text(catalog, "kodak_portra_400", "135") &&
+              !held.at("overscan_edge_text").as_string().empty() && held.at("overscan_f_number").as_double() == 4.0,
+              "the film edge's resolved fields");
+        char* text = nullptr;
+        check(spk_overscan_geometry(s.get(), &text) == SPK_OK && text, "overscan geometry");
+        Json geometry;
+        std::string parse_error;
+        const bool parsed = Json::parse(text, geometry, parse_error);
+        spk_string_free(text);
+        check(parsed && geometry.at("valid").as_bool(), "overscan geometry is not valid after a render");
+        const auto cw = std::uint32_t(geometry.at("canvas_w").as_double()), ch = std::uint32_t(geometry.at("canvas_h").as_double());
+        std::cout << "film edge on the " << width << " x " << height << " frame: canvas " << cw << " x " << ch << '\n';
+        check(strip.result.width == cw && strip.result.height == ch && cw > width && ch > height,
+              "the film edge render is not the canvas around the frame");
+        // The date: printed in the frame, and the print changes with it.
+        RenderSettings dated = film;
+        dated.set("date_imprint_active", true);
+        SessionPtr d = open_film(dated);
+        Rendered with_date;
+        check(spk_render(d.get(), "full", &with_date.result) == SPK_OK, "render with the date");
+        check(session_params(d.get()).at("date_imprint_text").as_string() == "'26 10 16" &&
+              with_date.result.width == cw && with_date.pixels() != strip.pixels(), "the date did not print");
+    }
+}
+
 void integration(const fs::path& resources, const fs::path& arw,
                  const fs::path& nef, const fs::path& destination) {
     check(fs::create_directory(destination), "integration destination must be a new directory");
@@ -483,7 +1543,7 @@ void integration(const fs::path& resources, const fs::path& arw,
     report.set("arw", Json(path_text(arw))); report.set("nef", Json(path_text(nef)));
     FramePtr first;
     std::uint64_t first_pixels = 0, first_display = 0;
-    const auto exported = destination / fs::path(u8"已显示帧-原始16位.tif");
+    const auto exported = destination / fs::path(u8"\u5df2\u663e\u793a\u5e27-\u539f\u59cb16\u4f4d.tif");
     {
         PreviewHost host(resources);
         check(!host.current(), "new host already has a frame");
@@ -577,10 +1637,19 @@ void integration(const fs::path& resources, const fs::path& arw,
 
 int main(int argc, char** argv) {
     try {
+        settings_schema();
         settings_defaults();
+        settings_access();
+        settings_validation();
+        catalogue_rules();
+        wire_rules();
+        film_edge_rules();
+        settings_deltas();
         conversion();
         viewport_geometry();
-        if (argc == 5 && std::string(argv[1]) == "--film-policy") {
+        if (argc == 3 && std::string(argv[1]) == "--settings-engine") {
+            settings_engine(fs::path(reinterpret_cast<const char8_t*>(argv[2])));
+        } else if (argc == 5 && std::string(argv[1]) == "--film-policy") {
             film_policy(fs::path(reinterpret_cast<const char8_t*>(argv[2])),
                         fs::path(reinterpret_cast<const char8_t*>(argv[3])),
                         fs::path(reinterpret_cast<const char8_t*>(argv[4])));
@@ -591,6 +1660,7 @@ int main(int argc, char** argv) {
         } else if (argc != 1) {
             if (argc != 6 || std::string(argv[1]) != "--integration") {
                 std::cerr << "usage: spk_desktop_preview_test [--integration <resources> <ARW> <NEF> <new-output-directory>]\n"
+                             "       spk_desktop_preview_test --settings-engine <resources>\n"
                              "       spk_desktop_preview_test --film-policy <resources> <RAW> <new-output-directory>\n"
                              "       spk_desktop_preview_test --edit-controls <resources> <RAW> <new-output-directory>\n";
                 return 2;
