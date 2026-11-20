@@ -21,7 +21,7 @@
         "grid.style": "Estilo de cuadrícula de referencia",
         "grid.cross": "Cruz central",
         "grid.thirds": "Regla de los tercios",
-        "grid.dense": "Cuadrícula densa (10 × 10)",
+        "grid.dense": "Cuadrícula densa de celdas cuadradas",
         "menu.view": "Ver",
         "menu.zoomFit": "Ajustar a la ventana",
         "menu.zoom100": "Ver al 100 %",

@@ -40,6 +40,7 @@
 #include <functional>
 #include <QTimer>
 #include <QtCore/qfloat16.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -848,6 +849,30 @@ private:
                        (!shot.aperture || header.contains("f/")) &&
                        (!shot.shutter_s || header.contains(" s")), "header_matches_source_exif");
     }
+    bool checkSquareGrid(QQuickItem* grid) {
+        std::vector<double> xs, ys;
+        for (auto* item : grid->childItems()) {
+            const auto vertical = item->property("vertical");
+            if (!vertical.isValid()) continue;
+            if (vertical.toBool()) xs.push_back(item->x() + 1);
+            else ys.push_back(item->y() + 1);
+        }
+        std::sort(xs.begin(), xs.end());
+        std::sort(ys.begin(), ys.end());
+        if (!require(xs.size() >= 2 && ys.size() >= 2, "dense_grid_has_cells")) return false;
+        const double pitch = xs[1] - xs[0];
+        checks_["dense_grid_cell_width"] = pitch;
+        checks_["dense_grid_cell_height"] = ys[1] - ys[0];
+        const auto coversAxis = [pitch](const std::vector<double>& lines, double span) {
+            if (pitch <= 0 || lines.front() <= 0 || lines.front() > pitch ||
+                lines.back() >= span || span - lines.back() > pitch) return false;
+            for (std::size_t i = 1; i < lines.size(); ++i)
+                if (lines[i] - lines[i-1] != pitch) return false;
+            return std::binary_search(lines.begin(), lines.end(), std::round(span / 2));
+        };
+        return require(gridFillsViewport() && coversAxis(xs, grid->width()) && coversAxis(ys, grid->height()),
+                       "dense_grid_centered_square_cells") && capture("viewport-dense");
+    }
     bool checkGridModes() {
         auto* grid = window_.findChild<QQuickItem*>("alignmentGrid");
         if (!require(grid && !grid->isVisible(), "grid_starts_off")) return false;
@@ -869,19 +894,23 @@ private:
             click(option);
             if (!require(!menu->property("visible").toBool() && option->property("marked").toBool()
                          && toggle->property("checked").toBool(), "grid_style_selected")) return false;
-            int lines = 0;
-            for (auto* item : grid->childItems()) {
-                if (!item->property("vertical").isValid()) continue;
-                const bool vertical = item->property("vertical").toBool();
-                const auto span = vertical ? grid->width() : grid->height();
-                const auto at = (vertical ? item->x() : item->y()) + 1;
-                const int line = lines % (divisions - 1) + 1;
-                if (!require(std::abs(at - std::round(span * line / divisions)) < 1,
-                             QStringLiteral("grid_line_%1_%2").arg(divisions).arg(lines))) return false;
-                ++lines;
+            if (divisions == 10) {
+                if (!checkSquareGrid(grid)) return false;
+            } else {
+                int lines = 0;
+                for (auto* item : grid->childItems()) {
+                    if (!item->property("vertical").isValid()) continue;
+                    const bool vertical = item->property("vertical").toBool();
+                    const auto span = vertical ? grid->width() : grid->height();
+                    const auto at = (vertical ? item->x() : item->y()) + 1;
+                    const int line = lines % (divisions - 1) + 1;
+                    if (!require(std::abs(at - std::round(span * line / divisions)) < 1,
+                                 QStringLiteral("grid_line_%1_%2").arg(divisions).arg(lines))) return false;
+                    ++lines;
+                }
+                if (!require(gridFillsViewport() && lines == 2*(divisions-1),
+                             QStringLiteral("viewport_grid_%1").arg(divisions))) return false;
             }
-            if (!require(gridFillsViewport() && lines == 2*(divisions-1),
-                         QStringLiteral("viewport_grid_%1").arg(divisions))) return false;
             click(toggle);
             if (!require(!grid->isVisible() && !toggle->property("checked").toBool(), "grid_toggle_off")) return false;
             click(toggle);

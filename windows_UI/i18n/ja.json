@@ -21,7 +21,7 @@
         "grid.style": "参考グリッドの種類",
         "grid.cross": "十字線",
         "grid.thirds": "三分割線",
-        "grid.dense": "細かいグリッド（10 × 10）",
+        "grid.dense": "細かい正方形グリッド",
         "menu.view": "表示",
         "menu.zoomFit": "ウィンドウに合わせる",
         "menu.zoom100": "100% で表示",

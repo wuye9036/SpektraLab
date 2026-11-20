@@ -21,7 +21,7 @@
         "grid.style": "Reference grid style",
         "grid.cross": "Crosshair",
         "grid.thirds": "Rule of thirds",
-        "grid.dense": "Dense grid (10 × 10)",
+        "grid.dense": "Dense square grid",
         "menu.view": "View",
         "menu.zoomFit": "Zoom to Fit",
         "menu.zoom100": "Zoom to 100 %",

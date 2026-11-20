@@ -21,7 +21,7 @@
         "grid.style": "参考网格样式",
         "grid.cross": "十字线",
         "grid.thirds": "三分线",
-        "grid.dense": "密集网格（10 × 10）",
+        "grid.dense": "密集方格",
         "menu.view": "视图",
         "menu.zoomFit": "适合窗口",
         "menu.zoom100": "缩放至 100%",

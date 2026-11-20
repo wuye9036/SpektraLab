@@ -590,7 +590,8 @@ The header shows the filename, camera, aperture, shutter speed, ISO, lens and im
 It omits missing EXIF fields.
 
 Beside Zoom In, click the grid icon to show or hide the last selected style. Its arrow offers
-a centre crosshair, thirds (the initial style) and a 10 × 10 grid. Guides stay fixed to the
+a centre crosshair, thirds (the initial style) and a dense square grid centred on the viewport.
+The short side spans about ten squares and the long side extends at the same spacing. Guides stay fixed to the
 viewport while the photograph is zoomed or panned. They are excluded from exports.
 
 Nikon HE/HE* RAW remains explicitly unsupported by this LibRaw build. A failed

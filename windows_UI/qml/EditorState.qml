@@ -16,7 +16,7 @@ QtObject {
     // the canvas's id, which lives in another file.
     property FrameCanvas canvas: null
     property bool gridVisible: false
-    property int gridStyle: 3    // Equal divisions of each viewport axis.
+    property int gridStyle: 3    // 2: crosshair, 3: thirds, 10: dense squares.
     readonly property int gridDivisions: gridVisible ? gridStyle : 0
 
     function selectGridStyle(divisions) {
