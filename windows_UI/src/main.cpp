@@ -885,6 +885,8 @@ private:
             mouse(QEvent::MouseButtonPress, point, Qt::LeftButton, Qt::LeftButton);
             mouse(QEvent::MouseButtonRelease, point, Qt::LeftButton, Qt::NoButton);
         };
+        mouse(QEvent::MouseMove, toggle->mapToScene(toggle->boundingRect().center()), Qt::NoButton, Qt::NoButton);
+        if (!require(toggle->property("hovered").toBool(), "grid_button_hovered") || !capture("grid-hover")) return false;
         for (int divisions : {2, 3, 10}) {
             click(arrow);
             if (!require(menu->property("visible").toBool(), "grid_style_menu_opens")) return false;

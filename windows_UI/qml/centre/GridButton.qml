@@ -15,6 +15,7 @@ Rectangle {
         objectName: "gridToggleButton"
         width: Theme.toolButton
         height: parent.height
+        hoverEnabled: true
         text: L10n.tr("grid.title")
         checkable: true
         checked: control.editor.gridVisible
@@ -23,26 +24,13 @@ Rectangle {
             color: "transparent"; radius: 4
             border.color: toggle.visualFocus ? Theme.accent : "transparent"
         }
-        contentItem: Item {
-            Rectangle {
-                id: glyph
-                anchors.centerIn: parent
-                width: 16; height: 16; radius: 2
-                color: "transparent"
-                border.color: toggle.checked ? Theme.accent : Theme.text
-                Repeater {
-                    model: 4
-                    Rectangle {
-                        required property int index
-                        readonly property bool vertical: index < 2
-                        x: vertical ? 5 + index * 5 : 0
-                        y: vertical ? 0 : 5 + (index - 2) * 5
-                        width: vertical ? 1 : glyph.width
-                        height: vertical ? glyph.height : 1
-                        color: glyph.border.color
-                    }
-                }
-            }
+        contentItem: Text {
+            text: Icons.gridView
+            font.family: Theme.iconFamily
+            font.pixelSize: Theme.toolGlyph
+            color: toggle.checked ? Theme.accent : Theme.text
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
         }
         ToolTip.visible: hovered
         ToolTip.text: text
@@ -55,6 +43,7 @@ Rectangle {
         anchors.left: toggle.right
         width: 18
         height: parent.height
+        hoverEnabled: true
         text: L10n.tr("grid.style")
         onClicked: menu.visible ? menu.close() : menu.popup(control, control.width - menu.width, control.height + 2)
         background: Rectangle {
