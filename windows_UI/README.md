@@ -385,7 +385,13 @@ finished print, in its order and arithmetic. The canvas grades on the GPU
 between the sample and the display LUT (`shaders/colorcanvas.frag` includes
 `postdev.glsl`; the software backend runs the same `Grade` on the CPU), the
 navigator and crop editor likewise, and the strip thumbnail and the histogram
-count the graded frame. Every pixel is graded at its place on the uncropped
+use D3D11 compute. The GPU area-reduces the navigator and filmstrip, computes
+the local exposure guide and the 0.1% / 99.9% whole-print L* anchors, and bins
+the graded navigator without reading its graded pixels back. Reduced textures
+are retained for subsequent compute passes. On the Windows D3D11 path Vulkan writes the print directly into a shared
+RGBA16F texture. D3D11 reads the same allocation for analysis and Qt wraps
+it for drawing. The navigator, tone guide and histogram return reduced data
+to Qt. Every pixel is graded at its place on the uncropped
 source, so the vignette is the print's (`PostDevView.hpp`); with Film Edge on
 the whole film canvas is graded, rebate included, as the Mac grades the
 engine's print (Renderer `encodeLayer2(src: base)`, Exporter `applyLayer2`), and
@@ -406,13 +412,13 @@ mid-grey (0.3857, the Mac's) and its gains act on ProPhoto primaries.
 
 All engine work runs on one serial worker. Edits during a render are coalesced
 into the newest settings; superseded results never replace the displayed frame
-or newer controls. Changes update the preview after a 180 ms settling delay.
+or newer controls. Discrete changes wait 180 ms to coalesce. Sliders submit as soon as the worker is available.
 
 **Switching photographs** shows the next one the moment the click lands: its
 last developed picture as it was shown, graded (the picture cache: each
-photograph's picture reduced to 2560 px when it is left, 512 MB, least
+photograph's picture capped at the configured preview size when it is left, 512 MB, least
 recently used out first), else its own embedded preview cut and turned like it
-(the strip's at once, a 2048 px one read off the GUI thread a moment later).
+(the strip's at once, a preview at the configured size read off the GUI thread a moment later).
 It sits over the canvas until the photograph's frame lands and then fades out
 over it. A thin accent bar sweeps the canvas's top edge while anything
 develops, at full strength while a photograph opens. The host keeps the
@@ -421,27 +427,17 @@ so 36 MP decodes), so going back to one skips its decode -- 1.5 s of a D810
 NEF -- and lands in ~0.8 s at full resolution, with its picture on screen at
 once.
 
-**The preview resolution** (Settings > Rendering: 1080, 1920, 2560 by default,
-3840; read at start), as on the Mac (ARCHITECTURE.md §7.3): an open and every
-edit develop the engine's `live` tier at that long edge, and 400 ms after the
-edits stop the full frame follows (`PreviewHost` `Tier`, `HostOptions::
-preview_long_edge`). An edit while the full frame is developing cancels it
-(`cancel_full_render`, the one render that sent nothing, so the session is
-kept). A crop, turn, flip or straighten does not, unless the frame is cut (a
-film edge, a date on a cropped frame): a frame not cut is the same frame
-whatever its geometry, so the edit applies while any render develops
-(`geometryEditable`) and the render lands with its picture made again at the
-newest geometry; a cut frame's geometry waits for its render, as before. The
-live frame is published with a device pixel ratio of its pixels
-over the full frame's, so the canvas lays it out as the full frame -- zoom,
-100 %, pan and the Original's placement do not move when the full frame lands
--- and draws it filtered; `frameScale`, `fullResolution` and the reported size
-say the same to the QML. Every export renders the full frame first
-(`fullFrame`). Measured on a 36 MP D810 frame at 1600: a print edit 11 ms live
-against 436 ms full, the first picture of an open at 2.0 s and the full frame
-at 3.1 s. The self-test and `--snapshot` develop at full resolution unless
-`--preview-long-edge` says otherwise; the editing workflow's last block tests
-the live tier.
+On Windows, opening a photograph or changing a Pre-Dev setting develops a
+preview at the long edge selected in Settings > Rendering (1280 px by default).
+The editor reads `rendering.previewLongEdge` at startup. The same size caps
+the switch-photo cache, crop guide, navigator, export proof and embedded preview pages. During a slider drag the
+worker samples the latest value and the canvas can show completed samples
+of that gesture. Releasing the slider requests the full frame immediately. Holding it still
+for 220 ms also allows the worker to refine the image.
+For discrete changes, the full frame follows the preview after 400 ms.
+The previous print stays visible until its replacement is ready. Tests can
+override the preview size with `--preview-long-edge` (0 for full resolution).
+
 A geometry edit (crop, turn, flip, straighten, an undo across one, a film edge
 moving the crop) and a half-frame pair's frame-by-frame grade make the canvas's
 picture again from the frame already developed, never on the GUI thread: a
@@ -455,14 +451,20 @@ thread. Measured with `spk_qt_geometry_bench` (below) on the 33 MP ARW and the
 and a crop step on a straightened frame 0.7-0.8 s; each now returns in about
 0.1 ms, and the picture lands 0.24-0.49 s after the drag stops (0.06-0.11 s for a
 plain crop).
-The same worker makes the canvas images before a result is delivered: the
-frame's RGBA16 as `RGBX16FPx4` half floats (value/65535, 8 bytes per pixel like
-the RGBA16) tagged with the colour space the session's open reply reports
-(`FrameImage.hpp`; an output space it cannot name is refused, never
-defaulted), a navigator image reduced to a 1024 px long edge by area
-averaging, and from that the 180x120 strip thumbnail, also half floats; the
-Original and the histogram are made there too. A superseded render is not
-converted. File dialogs pause pending updates until they close; opening and
+For an ordinary Windows print the worker creates a single-mip D3D11
+texture and imports its NT handle into Vulkan on the same adapter. The final
+compute shader rounds the print to the same 16-bit output codes and half-float
+display values as the host publication. A keyed mutex orders the Vulkan write,
+the D3D11 analysis and the Qt scene-graph read. The full-resolution texture is
+8 bytes per pixel. An additional 8 bytes per pixel retain the exact integer
+output on the GPU until an export or CPU geometry operation requests pixels.
+The budget check includes both allocations. Leaving a photo retains only its
+reduced preview in the library cache. The source encoding comes from the
+session. CPU-composed pairs, host-side transformed frames, software drawing and
+incompatible adapters use the host image path. Run
+`spk_qt_color_canvas_test --interop <resources>` on a hardware adapter for the
+render-target, analysis and export comparison. Repeated `--photo <RAW>`
+arguments also exercise full-frame residency across selection changes. File dialogs pause pending updates until they close; opening and
 exporting lock conflicting commands. A failed current render retains the
 displayed frame and restores its controls; a retry is available. Closing
 during work waits for the current operation.
@@ -563,8 +565,7 @@ existing files.
 
 As on the Mac (ARCHITECTURE.md §7.5), every session asks the engine for
 encoded **ProPhoto RGB** (`PreviewController::kWorkingSpace`) and the canvas
-receives half floats tagged with whatever the session reports (Qt 6.11's scene
-graph uploads `RGBX16FPx4` as an `RGBA16F` texture on D3D11). Every export
+receives half floats tagged with whatever the session reports. Every export
 reads the engine's RGBA16, not the display image, and leaves the working
 space exactly once: the export page through the engine's output transform into
 the recipe's space (`RecipeExport.hpp`), and the legacy single and batch export

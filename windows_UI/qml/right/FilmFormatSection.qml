@@ -25,6 +25,7 @@ MacSection {
     id: section
     sectionId: "filmFormat"
     title: L10n.tr("format.title")
+    readonly property real defaultLongEdge: preview.parameterFields.find(row => row.key === "film_format_mm").initial
     readonly property var p: preview.parameters
     function flag(key, fallback) { return p[key] === undefined ? fallback : p[key] === true }
     function number(key, fallback) { return p[key] === undefined ? fallback : Number(p[key]) }
@@ -57,7 +58,7 @@ MacSection {
     onResetRequested: {
         var all = effects(true)
         for (var key in strengthDefaults) all[key] = strengthDefaults[key]
-        all.film_format_mm = 35
+        all.film_format_mm = section.defaultLongEdge
         preview.setParameters(all)
     }
     menuItems: [
@@ -80,10 +81,10 @@ MacSection {
         toolTip: L10n.tr("format.note")
         PillDropdown {
             id: longEdge
-            model: [L10n.tr("format.size18"), L10n.tr("format.size24"), L10n.tr("format.default35"),
+            model: [L10n.tr("format.size18"), L10n.tr("format.size24"), "35 mm",
                     L10n.tr("format.size36"), L10n.tr("format.size56"), "70 mm", "90 mm"]
             readonly property var lengths: [18, 24, 35, 36, 56, 70, 90]
-            readonly property real actualLength: Number(preview.adjustments.filmFormatMm === undefined ? 35 : preview.adjustments.filmFormatMm)
+            readonly property real actualLength: Number(preview.adjustments.filmFormatMm === undefined ? section.defaultLongEdge : preview.adjustments.filmFormatMm)
             // Reads `model` so a language switch (a new model, index reset to
             // 0) re-runs the binding.
             currentIndex: { model; return lengths.indexOf(actualLength) }

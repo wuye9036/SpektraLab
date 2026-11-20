@@ -94,12 +94,15 @@ Item {
         id: frameCanvas
         objectName: "frameCanvas"
         anchors.fill: parent
-        image: view.editor.cropMode ? preview.uncroppedImage : view.showOriginal ? preview.originalImage : preview.previewImage
+        image: view.editor.cropMode ? preview.canvasWholeImage : view.showOriginal ? preview.originalImage : preview.canvasPreviewImage
+        nativeDisplay: view.editor.cropMode ? preview.nativeWhole : view.showOriginal ? undefined : preview.nativePreview
         interactive: !view.editor.cropMode
         // Post-Dev on the print and in the crop editor (the whole source),
         // never on the Original, which is the decode before any of it.
         // A cut frame's crop editor shows the undeveloped whole decode, which
         // the Mac draws as the Original (Session.swift:407-411), ungraded.
+        preparedToneGuide: preview.preparedToneGuide
+        toneSource: preview.postDevToneSource
         postDev: view.showOriginal || (view.editor.cropMode && preview.frameIsCut) ? ({}) : preview.canvasPostDev
         sourceMap: view.editor.cropMode ? [] : preview.postDevSourceMap
         // The soft proof (S) and its gamut warning (Shift+S): whatever the

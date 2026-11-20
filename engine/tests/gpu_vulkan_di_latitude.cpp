@@ -6,6 +6,7 @@
 // past the dispatch fold of a 65535-group device. This is local kernel
 // validation, not a claim of whole-frame Metal parity.
 #include "gpu/gpu.hpp"
+#include "core/tone_guide.hpp"
 #include "gpu_vulkan_read.hpp"
 #include "digital_intermediate.hpp"
 #include "latitude_fit.hpp"
@@ -545,6 +546,35 @@ bool check_latitude(Gpu* gpu, Stats& stats, std::string& error) {
         { error = "latitude: the split cases do not straddle a column centre"; return false; }
     return true;
 }
+bool check_tone_filter(Gpu* gpu, std::string& error) {
+    for (const auto shape : {std::array<uint32_t, 2>{513, 73}, {1, 17}, {33, 1}, {1, 1}}) {
+        const uint32_t w = shape[0], h = shape[1];
+        std::vector<float> x(size_t(w) * h);
+        for (size_t i = 0; i < x.size(); ++i)
+            x[i] = i % w < w / 2 ? -18.f : float(3 * std::sin(.013 * i) + std::cos(.041 * i));
+        auto input = gpu->upload(x.data(), x.size() * sizeof(float), error);
+        auto a = gpu->alloc(2 * x.size() * sizeof(float), error);
+        auto b = gpu->alloc(2 * x.size() * sizeof(float), error);
+        if (!input || !a || !b) return false;
+        const auto radius = uint32_t(std::max(1L,std::lround(std::max(.5,.03 * std::max(w,h)) / .816)));
+        for (uint32_t pass = 0; pass < 4; ++pass) {
+            const uint32_t meta[] = {w,h,radius,pass};
+            auto output = pass % 2 ? b : a;
+            if (!gpu->dispatch("spk_scene_tone_filter",
+                    {Arg::buf(input), Arg::inline_bytes(meta, 4), Arg::buf(output)}, x.size(), error)) return false;
+            input = output;
+        }
+        std::vector<float> result;
+        if (!read_test_buffer(gpu,input,result,error)) return false;
+        auto ref = spk::tone_guide::coefficients(std::vector<double>(x.begin(),x.end()),w,h);
+        for (size_t i=0;i<ref.size();++i)
+            if (!(std::abs(result[i]-ref[i]) < .001f)) {
+                error = "scene-tone GPU guide differs from the double reference";
+                return false;
+            }
+    }
+    return true;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -553,6 +583,10 @@ int main(int argc, char** argv) {
     std::unique_ptr<Gpu> gpu(Gpu::create_vulkan(std::string(argv[1]) + "/vulkan", error));
     if (!gpu) { std::fprintf(stderr, "Vulkan device: %s\n", error.c_str()); return 1; }
     std::printf("Vulkan device: %s\n", gpu->device_name().c_str());
+    if (!check_tone_filter(gpu.get(),error)) {
+        std::fprintf(stderr,"scene-tone filter: %s\n",error.c_str());
+        return 1;
+    }
     Stats di, latitude;
     if (!check_di(gpu.get(), di, error)) { std::fprintf(stderr, "DI encode: %s\n", error.c_str()); return 1; }
     std::printf("DI encode: %zu cases, max abs error %.3g codes, worst %.2f of its bar at %s; "

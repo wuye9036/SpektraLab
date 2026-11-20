@@ -85,6 +85,7 @@ struct WriteOptions {
     QImage previewImage;                 // 8-bit-able picture for the page; tagged
     bool untagged = false;
     bool overwrite = false;
+    int previewLongEdge = kDefaultPreviewLongEdge;
 };
 enum class Published { written, exists };
 // Writes `pixels` (RGBA64 encoded in `space`) to `destination` through a
@@ -106,8 +107,9 @@ std::optional<spkhost::Exif> exifFor(const std::filesystem::path& source, const 
 // paths written.
 QStringList copyDiViewLuts(const QString& directory, const std::filesystem::path& resources);
 // The DI preview page: Cineon codes through the shipped Cineon-to-ProPhoto
-// view LUT (trilinear), long edge at most 2048, tagged ProPhoto RGB.
-QImage diViewPreview(const QImage& cineonRgba64, const std::filesystem::path& resources);
+// view LUT (trilinear), at the selected preview size, tagged ProPhoto RGB.
+QImage diViewPreview(const QImage& cineonRgba64, const std::filesystem::path& resources,
+                     int previewLongEdge = kDefaultPreviewLongEdge);
 
 // One photograph under one recipe.
 struct Job {
@@ -119,6 +121,7 @@ struct Job {
     // Optional Post-Dev hook, called on the uncropped RGBA64 frame in its own
     // encoding before geometry. Unset: no grade.
     std::function<void(QImage& uncropped, const OutputEncoding& encoding)> grade;
+    int previewLongEdge = kDefaultPreviewLongEdge;
 };
 struct Outcome {
     enum Kind { written, skipped } kind = written;

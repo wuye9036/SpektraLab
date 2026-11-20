@@ -23,7 +23,7 @@ namespace spk::desktop {
 namespace {
 namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
-using EnginePtr = std::unique_ptr<spk_engine, decltype(&spk_engine_destroy)>;
+using EnginePtr = std::shared_ptr<spk_engine>;
 using SessionPtr = std::unique_ptr<spk_session, decltype(&spk_session_release)>;
 
 double elapsed(Clock::time_point start) {
@@ -241,9 +241,8 @@ const std::vector<Row>& rows() {
         t.push_back(number("print_exposure", "Print exposure", PRINT, 0.05, 20.0, 1.0, &R::print_exposure));
         t.push_back(number("exposure_compensation_ev", "Film exposure (EV)", SHOOT, -8.0, 8.0, 0.0,
                            &R::film_exposure_ev));
-        // The engine's 35 mm, including its grain and halation scale; a UI
-        // label such as "35 mm" is no licence to substitute 36.
-        t.push_back(number("film_format_mm", "Film format (mm)", SHOOT, 4.0, 200.0, 35.0, &R::film_format_mm));
+        // New photographs use the 36 mm long edge of a 135 frame. Missing wire values still mean 35 mm.
+        t.push_back(number("film_format_mm", "Film format (mm)", SHOOT, 4.0, 200.0, 36.0, 35.0, &R::film_format_mm));
         t.push_back(boolean("grain_active", "Grain", SHOOT, true, &R::grain_active));
         t.push_back(number("grain_amount", "Grain amount", SHOOT, 0.0, 2.0, 1.0, &R::grain_amount));
         t.push_back(boolean("halation_active", "Halation", SHOOT, true, &R::halation_active));
@@ -553,27 +552,34 @@ std::vector<float> cut_decode(const io::DecodedRaw& in, const EngineCut& g, std:
 }
 
 // The whole decode undeveloped, for framing in the gate: box-downsampled to
-// a long edge of at most 2048, linear ProPhoto (D50) to sRGB (D65, Bradford),
+// at most the configured preview long edge, linear ProPhoto (D50) to sRGB (D65, Bradford),
 // its mean luminance placed at 18 %, sRGB encoded. Only a guide to frame
 // with; the print is the engine's.
-std::shared_ptr<const Frame::SourcePreview> source_preview(const io::DecodedRaw& in) {
+std::shared_ptr<const Frame::SourcePreview> source_preview(const io::DecodedRaw& in, std::uint32_t edge) {
     auto preview = std::make_shared<Frame::SourcePreview>();
-    const std::uint32_t k = std::max(1u, (std::max(in.width, in.height) + 2047) / 2048);
-    preview->width = std::max(1u, in.width / k);
-    preview->height = std::max(1u, in.height / k);
+    const double scale = std::min(1.0, double(edge) / std::max(in.width, in.height));
+    preview->width = std::max(1u, std::uint32_t(std::lround(in.width * scale)));
+    preview->height = std::max(1u, std::uint32_t(std::lround(in.height * scale)));
     std::vector<float> linear(std::size_t(preview->width) * preview->height * 3);
     double mean = 0.0;
-    for (std::uint32_t y = 0; y < preview->height; ++y)
+    for (std::uint32_t y = 0; y < preview->height; ++y) {
+        const auto y0 = std::uint64_t(y) * in.height / preview->height;
+        const auto y1 = std::uint64_t(y + 1) * in.height / preview->height;
         for (std::uint32_t x = 0; x < preview->width; ++x) {
+            const auto x0 = std::uint64_t(x) * in.width / preview->width;
+            const auto x1 = std::uint64_t(x + 1) * in.width / preview->width;
             double sum[3] = {};
-            for (std::uint32_t j = 0; j < k; ++j) {
-                const float* row = in.rgb.data() + (std::size_t(y * k + j) * in.width + x * k) * 3;
-                for (std::uint32_t i = 0; i < k * 3; ++i) sum[i % 3] += row[i];
+            for (auto sy = y0; sy < y1; ++sy) {
+                const float* pixel = in.rgb.data() + (sy * in.width + x0) * 3;
+                for (auto sx = x0; sx < x1; ++sx, pixel += 3)
+                    for (int c = 0; c < 3; ++c) sum[c] += pixel[c];
             }
+            const double count = double((y1 - y0) * (x1 - x0));
             float* p = linear.data() + (std::size_t(y) * preview->width + x) * 3;
-            for (int c = 0; c < 3; ++c) p[c] = float(sum[c] / double(k * k));
+            for (int c = 0; c < 3; ++c) p[c] = float(sum[c] / count);
             mean += 0.2880402 * p[0] + 0.7118741 * p[1] + 0.0000857 * p[2];
         }
+    }
     mean /= double(preview->width) * preview->height;
     const double gain = std::clamp(mean > 0.0 ? 0.18 / mean : 1.0, 0.125, 32.0);
     constexpr double m[9] = {2.03406, -0.72733, -0.30674, -0.22881, 1.23173, -0.00292, -0.00857, -0.15329, 1.16186};
@@ -1138,6 +1144,19 @@ OutputEncoding output_encoding(const Json& open_reply) {
 
 Frame::~Frame() { spk_result_free(&result_); }
 
+const spk_result& Frame::pixels() const {
+#ifdef _WIN32
+    std::lock_guard lock(pixelsMutex_);
+    if (display && display->readPixels) {
+        std::string error;
+        if (!display->readPixels(result_, error)) throw std::runtime_error(error);
+        display->readPixels = {}; // the exact host copy now owns these codes
+        display->engineOwner.reset();
+    }
+#endif
+    return result_;
+}
+
 std::vector<std::uint8_t> rgba16_to_bgra8(const spk_result& result) {
     require(result.rgba16 && result.width && result.height && result.row_stride_px >= result.width,
             "Invalid RGBA16 display dimensions or row pitch");
@@ -1173,7 +1192,22 @@ struct PreviewHost::Impl {
     HostOptions options;
     Catalog catalog;
     double engine_create_ms = 0.0;
-    EnginePtr engine{nullptr, &spk_engine_destroy};
+    EnginePtr engine;
+    spk_status renderFrame(Frame& frame, spk_session* live, const char* tier, bool reprint,
+                           const OutputEncoding& encoding, const EngineCut& geometry, bool cut, FrameUse use) {
+#ifdef _WIN32
+        if (use==FrameUse::display && !options.bgra8_display && options.beginDisplay && (cut || geometry.identity())) {
+            frame.display = options.beginDisplay(encoding);
+            if (frame.display) {
+                auto status = gpu::render_d3d11(live, tier, reprint, *frame.display, frame.result_, true, true);
+                if (frame.display->texture) frame.display->engineOwner = engine;
+                else frame.display.reset();
+                return status;
+            }
+        }
+#endif
+        return reprint ? spk_reprint(live, tier, &frame.result_) : spk_render(live, tier, &frame.result_);
+    }
     // Declaration order makes session release precede engine destruction.
     SessionPtr session{nullptr, &spk_session_release};
     // What `session` renders into, from its open reply.
@@ -1359,7 +1393,7 @@ PreviewHost::PreviewHost(const fs::path& resources, HostOptions options) : impl_
     require(fs::is_directory(impl_->resources), "Engine resources directory is missing");
     impl_->catalog = read_catalog(impl_->resources);
     const auto started = Clock::now();
-    impl_->engine.reset(spk_engine_create(path.c_str(), nullptr));
+    impl_->engine.reset(spk_engine_create(path.c_str(), nullptr), &spk_engine_destroy);
     impl_->engine_create_ms = elapsed(started);
     require(bool(impl_->engine), "Engine creation failed: " + std::string(spk_last_error(nullptr)));
 }
@@ -1373,7 +1407,7 @@ const io::DecodedRaw& PreviewHost::input() const noexcept { return impl_->decode
 const io::DecodedRaw& PreviewHost::decoded() const noexcept { return impl_->decoded; }
 
 FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const RenderSettings& settings,
-                               const EngineCut& geometry, Tier tier) {
+                               const EngineCut& geometry, Tier tier, FrameUse use) {
     const auto started = Clock::now();
     const bool scan_film = validate_settings(settings, impl_->catalog);
     require(mode == DecodeMode::compatible16 || mode == DecodeMode::headroom, "Unknown RAW decode mode");
@@ -1411,7 +1445,7 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
     next->timings.open_ms = elapsed(t);
     next->encoding = opened.encoding;
     t = Clock::now();
-    const auto status = spk_render(opened.session.get(), tier_name(impl_->options, tier), &next->result_);
+    const auto status = impl_->renderFrame(*next, opened.session.get(), tier_name(impl_->options, tier), false, opened.encoding, input.photo.geometry, input.cut, use);
     require(status == SPK_OK, "Render: " + std::string(spk_last_error(impl_->engine.get())));
     next->timings.render_ms = elapsed(t);
     next->timings.engine_render_ms = next->result_.elapsed_ms;
@@ -1428,7 +1462,7 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
     next->picture_height = ph;
     set_tier(*next, impl_->options, tier_name(impl_->options, tier), pw, ph);
     next->overscan_geometry = read_overscan_geometry(opened.session.get());
-    auto preview = input.cut ? source_preview(decoded) : nullptr;
+    auto preview = input.cut ? source_preview(decoded, previewImageLongEdge(impl_->options.preview_long_edge)) : nullptr;
     next->source_preview = preview;
     // Commit only after all allocations and GPU/CPU work succeeded.
     impl_->session = std::move(opened.session);
@@ -1449,7 +1483,7 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
     return next;
 }
 
-FramePtr PreviewHost::render(const RenderSettings& settings, const EngineCut& geometry, Tier tier) {
+FramePtr PreviewHost::render(const RenderSettings& settings, const EngineCut& geometry, Tier tier, FrameUse use) {
     const auto started = Clock::now();
     require(bool(impl_->frame), "Open a RAW image before rendering");
     require(!impl_->pair, "A half-frame pair renders through render_pair");
@@ -1457,7 +1491,7 @@ FramePtr PreviewHost::render(const RenderSettings& settings, const EngineCut& ge
     // decoded again and a new negative developed (macOS re-decodes too,
     // Session.swift:2694-2725). open_raw is transactional, as below.
     if (!same_decode(impl_->frame->settings, settings))
-        return open_raw(impl_->frame->source, impl_->frame->decode_mode, settings, geometry, tier);
+        return open_raw(impl_->frame->source, impl_->frame->decode_mode, settings, geometry, tier, use);
     const char* tier_id = tier_name(impl_->options, tier);
     const bool scan_film = validate_settings(settings, impl_->catalog);
     auto next = std::shared_ptr<Frame>(new Frame());
@@ -1509,7 +1543,7 @@ FramePtr PreviewHost::render(const RenderSettings& settings, const EngineCut& ge
             std::lock_guard lock(impl_->cancel_mutex);
             impl_->cancellable = impl_->session.get();
         }
-        const auto status = spk_reprint(impl_->session.get(), tier_id, &next->result_);
+        const auto status = impl_->renderFrame(*next, impl_->session.get(), tier_id, true, impl_->encoding, input.photo.geometry, input.cut, use);
         if (cancellable) {
             std::lock_guard lock(impl_->cancel_mutex);
             impl_->cancellable = nullptr;
@@ -1527,7 +1561,7 @@ FramePtr PreviewHost::render(const RenderSettings& settings, const EngineCut& ge
             next->timings.display_ms = elapsed(t);
         }
         next->overscan_geometry = read_overscan_geometry(impl_->session.get());
-        if (input.cut && !impl_->preview) impl_->preview = source_preview(impl_->decoded);
+        if (input.cut && !impl_->preview) impl_->preview = source_preview(impl_->decoded, previewImageLongEdge(impl_->options.preview_long_edge));
     } catch (const RenderCancelled&) {
         throw;   // the session holds exactly what it held: keep it
     } catch (...) {

@@ -176,17 +176,16 @@ void settings_defaults() {
         check(settings.get(field.key) == field.initial, "default settings differ from the rows' initial values");
         if (field.initial != field.absent) deviations.push_back(field.key);
     }
-    // Each with its macOS source (Params.swift): FilmParams.printStock,
-    // FilmParams.filterShiftCC, FilmParams.autoExposureMethod.
-    check(deviations == std::vector<std::string>{"print_stock", "filter_shift_scale", "auto_exposure_method"},
+    // Windows defaults to the 135 frame length. The other three defaults
+    // follow FilmParams.printStock, filterShiftCC and autoExposureMethod on macOS.
+    check(deviations == std::vector<std::string>{"print_stock", "film_format_mm", "filter_shift_scale", "auto_exposure_method"},
           "new-photograph defaults deviate from the engine for an undocumented row");
     check(settings.film_stock == "kodak_portra_400" && settings.print_stock == "kodak_supra_endura",
           "default film/paper pair is not the macOS one");
     check(settings.get("filter_shift_scale") == SettingValue(40.0), "filter sliders are not macOS strength");
     check(settings.get("auto_exposure_method") == SettingValue(std::string("balanced")),
           "default metering is not balanced");
-    // A UI format label such as "35 mm" is no licence to substitute 36.
-    check(settings.film_format_mm == 35.0, "desktop film format default differs from engine");
+    check(settings.film_format_mm == 36.0, "new photographs use the 36 mm long edge of a 135 frame");
 }
 
 void settings_access() {
@@ -434,7 +433,7 @@ void film_edge_rules() {
     RenderSettings s;
     PhotoInfo photo;
     photo.decode_width = 6000; photo.decode_height = 4000;
-    check(date_back_camera(s, photo)->id == "135", "35 mm on a 3:2 frame is not 135");
+    check(date_back_camera(s, photo)->id == "135", "the default 3:2 frame uses a 135 date back");
     s.film_format_mm = 24; photo.decode_width = 4000; photo.decode_height = 3000;
     check(date_back_camera(s, photo)->id == "135_half", "24 mm on 4:3 is not half frame");
     s.film_format_mm = 56; photo.decode_width = 5600; photo.decode_height = 4150;
@@ -491,6 +490,7 @@ void film_edge_rules() {
         // The date alone on a frame cropped to half its width: the cut's own
         // long edge is the film format, and the date keeps its size in it.
         RenderSettings a;
+        a.film_format_mm = 35.0; // A photograph saved with the previous desktop default.
         a.set("date_imprint_active", true);
         PhotoInfo q;
         q.decode_width = 6000; q.decode_height = 4000;

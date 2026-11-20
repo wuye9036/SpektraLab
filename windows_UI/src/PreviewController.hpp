@@ -2,6 +2,7 @@
 #include "desktop/preview_host.hpp"
 #include "desktop/raw_white_balance.hpp"
 #include "FrameOutput.hpp"
+#include "NativeCanvasFrame.hpp"
 #include "EditStore.hpp"
 #include "Messages.hpp"
 #include "PostDevSurfaces.hpp"
@@ -18,6 +19,7 @@
 #include <QObject>
 #include <QPointF>
 #include <QStringList>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
@@ -47,6 +49,7 @@ class PreviewController final : public QObject {
     Q_PROPERTY(QUrl sourceFolder READ sourceFolder NOTIFY frameChanged)
     // The canvas's picture: the developed frame after geometry, RGBX16FPx4
     // tagged with the session's encoding (FrameImage.hpp).
+    Q_PROPERTY(QImage postDevToneSource READ postDevToneSource NOTIFY frameChanged)
     Q_PROPERTY(QImage previewImage READ previewImage NOTIFY frameChanged)
     // While someone edits, the frame is developed at the preview resolution
     // (the live tier) and the full one follows once they stop. frameScale is
@@ -67,7 +70,7 @@ class PreviewController final : public QObject {
     Q_PROPERTY(QVariantMap placeholderPostDev READ placeholderPostDev NOTIFY placeholderChanged)
     Q_PROPERTY(QVariantList placeholderSourceMap READ placeholderSourceMap NOTIFY placeholderChanged)
     Q_PROPERTY(bool opening READ opening NOTIFY stateChanged)
-    // previewImage reduced to a long edge of at most 1024 px (area average,
+    // previewImage reduced to the configured preview long edge (area average,
     // same tag), for the navigator: a second full-size texture is 264 MB at
     // 33 MP. Changes whenever previewImage does.
     Q_PROPERTY(QImage navigatorImage READ navigatorImage NOTIFY frameChanged)
@@ -115,6 +118,11 @@ class PreviewController final : public QObject {
     Q_PROPERTY(QVariantList libraryItems READ libraryItems NOTIFY libraryChanged)
     Q_PROPERTY(int activeIndex READ activeIndex NOTIFY libraryChanged)
     Q_PROPERTY(int selectedCount READ selectedCount NOTIFY libraryChanged)
+    Q_PROPERTY(QImage canvasPreviewImage READ canvasPreviewImage NOTIFY frameChanged)
+    Q_PROPERTY(QImage canvasWholeImage READ canvasWholeImage NOTIFY frameChanged)
+    Q_PROPERTY(QVariant nativePreview READ nativePreview NOTIFY frameChanged)
+    Q_PROPERTY(QVariant nativeWhole READ nativeWhole NOTIFY frameChanged)
+    Q_PROPERTY(QImage preparedToneGuide READ preparedToneGuide NOTIFY frameChanged)
     Q_PROPERTY(QImage uncroppedImage READ uncroppedImage NOTIFY frameChanged)
     Q_PROPERTY(QRectF cropRect READ cropRect WRITE setCropRect NOTIFY geometryChanged)
     Q_PROPERTY(bool batchExporting READ batchExporting NOTIFY stateChanged)
@@ -320,7 +328,7 @@ public:
     // preview_long_edge); 0 develops every edit at full resolution, as the
     // workflow tests pin.
     explicit PreviewController(std::filesystem::path resources, QObject* parent=nullptr, ImageFactory imageFactory={},
-                               QString editDirectory={}, QString outputColorSpace={}, int previewLongEdge=0);
+                               QString editDirectory={}, QString outputColorSpace={}, int previewLongEdge=0, bool d3d11Canvas=false, bool liveDevelopment=true);
     static QImage imageFromFrame(const spk::desktop::FramePtr&);
     ~PreviewController() override;
     bool ready() const { return ready_; }
@@ -341,7 +349,12 @@ public:
     QString status() const { return status_; }
     QString fileName() const;
     QUrl sourceFolder() const;
-    QImage previewImage() const { return image_; }
+    QVariant nativePreview() const;
+    QVariant nativeWhole() const;
+    QImage preparedToneGuide() const { return prepared_guide_; }
+    QImage postDevToneSource() const { return full_image_; }
+    QImage canvasPreviewImage() const { return image_; }
+    QImage previewImage() const;
     // False while the canvas's picture is being made again from the frame
     // already developed (a geometry edit, a pair's grade): previewImage,
     // navigatorImage and the histogram are then the last picture's, and
@@ -357,6 +370,7 @@ public:
     QVariantMap placeholderPostDev() const { return placeholder_postdev_; }
     QVariantList placeholderSourceMap() const { return placeholder_source_map_; }
     bool opening() const { return busy_&&active_operation_=="open"; }
+    int previewImageEdge() const { return preview_image_edge_; }
     QImage navigatorImage() const { return navigator_; }
     QVariantMap metadata() const;
     QVariantList films() const { return films_; }
@@ -382,7 +396,8 @@ public:
     int selectedCount() const;
     // A cut frame's uncropped picture is the undeveloped decode (the guide
     // the crop editor frames over); any other frame's is the whole print.
-    QImage uncroppedImage() const { return frame_&&frame_->cut&&!source_image_.isNull()?source_image_:full_image_; }
+    QImage uncroppedImage() const;
+    QImage canvasWholeImage() const { return frame_&&frame_->cut&&!source_image_.isNull()?source_image_:full_image_; }
     QVariantList filmFormats() const;
     QVariantMap filmEdge() const;
     QVariantMap dateBack() const;
@@ -730,7 +745,7 @@ private:
     };
     // Everything the canvases show of one frame, made on the worker.
     struct Publication {
-        QImage full, visible, navigator;
+        QImage full, visible, navigator, preparedGuide;
         std::vector<float> histogram, uncropped_histogram;  // of visible, of full
         QImage source;  // a cut frame's undeveloped decode (Frame::source_preview)
         // The whole print, unturned and uncropped, at the strip's size: what
@@ -744,11 +759,12 @@ private:
         std::optional<PairGrades> pair_grades;
     };
     static QList<double> bins(const std::vector<float>& values);
-    static Publication publish(const ImageFactory& factory, const spk::desktop::FramePtr& frame,
+    Publication publish(const ImageFactory& factory, const spk::desktop::FramePtr& frame,
                                const spk::desktop::output::Geometry& geometry);
     struct Reply {
         quint64 generation=0;
         quint64 settings_revision=0;
+        quint64 drag_id=0;
         QString operation, error;
         QString message;
         int library_index=-1;
@@ -803,6 +819,7 @@ private:
     bool scanFilmSetting() const;
     bool chooseFilm(int index);
     bool choosePaper(int index);
+    void settingsEdited();
     void schedulePreview();
     // The Original: drop what no longer matches the frame (a new decode) or
     // the geometry, and ask the worker for a new one while it is wanted.
@@ -830,7 +847,7 @@ private:
     spk::desktop::FramePtr frame_;
     QImage image_;
     // The picture cache: each photograph's last developed picture as the
-    // canvas showed it, reduced to kPictureEdge, with what it was developed
+    // canvas showed it, bounded by the preview long edge, with what it was developed
     // with; kept when the photograph is left, least recently used first out
     // past kPictureCacheBytes. Only the placeholder reads it.
     struct CachedPicture {
@@ -843,7 +860,6 @@ private:
         qint64 bytes=0;
         quint64 stamp=0;
     };
-    static constexpr int kPictureEdge=2560;
     static constexpr qint64 kPictureCacheBytes=qint64(512)<<20;
     std::map<QString,CachedPicture> picture_cache_;
     qint64 picture_cache_bytes_=0;
@@ -856,7 +872,9 @@ private:
     void cachePicture();
     void showPlaceholder(int index);
     void dismissPlaceholder();
-    QImage full_image_;
+    QVariant nativePrint() const;
+    QImage uncroppedImageForPrint() const;
+    QImage full_image_, prepared_guide_;
     QImage source_image_;
     QImage navigator_;
     double convert_ms_=0, publish_ms_=0;
@@ -929,11 +947,15 @@ private:
     std::atomic<quint64> settings_revision_{0};
     QString active_operation_;
     QTimer auto_apply_;
+    QElapsedTimer last_edit_;
+    quint64 drag_id_ = 0;          // First settings revision in this slider gesture.
+    quint64 released_revision_ = 0;
     // The full frame after a live one (ARCHITECTURE.md §7.3): started once
     // the edits have stopped for full_timer_'s interval, cancelled by the next
     // edit through the host (cancel_full_render), which the GUI thread reaches
     // under host_mutex_ while the worker's host exists.
-    std::uint32_t preview_long_edge_=0;
+    const int preview_image_edge_;
+    const bool live_development_;
     QTimer full_timer_;
     bool full_job_=false;
     std::mutex host_mutex_;
@@ -1062,10 +1084,10 @@ private:
     static PairGrades pairGrades(const LibraryItem& item);
     // The pair's print as the canvas shows it: graded frame by frame when the
     // grades are layered, else the print itself. Pure; runs off the GUI thread.
-    static Visible gradedPair(const QImage& full, const PairGrades& grades,
+    Visible gradedPair(const QImage& full, const PairGrades& grades,
                               const std::array<spk::desktop::PairRect, 2>& holes);
     // On the worker: a pair print's publication graded with `grades`.
-    static void gradePublication(Publication& publication, const PairGrades& grades,
+    void gradePublication(Publication& publication, const PairGrades& grades,
                                  const std::array<spk::desktop::PairRect, 2>& holes);
     // A pair print the worker graded with `grades` has been published.
     void takePairGrades(const PairGrades& grades);

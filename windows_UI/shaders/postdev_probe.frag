@@ -14,6 +14,7 @@ layout(std140, binding = 0) uniform buf {
 };
 layout(binding = 1) uniform sampler2D frameTexture;
 layout(binding = 2) uniform sampler2D curveTexture;
+layout(binding = 3) uniform sampler2D toneGuide;
 
 void main()
 {
@@ -21,5 +22,5 @@ void main()
     // (gid + 0.5) / size, as Shaders.metal:340 and Grade::apply.
     vec2 uv = (vec2(p) + 0.5) / frame.xy;
     vec3 c = texelFetch(frameTexture, p, 0).rgb;
-    fragColor = vec4(postdev(c, uv, grade, curveTexture), 1.0);
+    fragColor = vec4(postdev(c, uv, grade, curveTexture, toneGuide), 1.0);
 }

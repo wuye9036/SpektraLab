@@ -3,7 +3,7 @@
 // Compute planes remain device-local; independent reusable host buffers stage
 // uploads and readbacks. Every submission completes before returning, so no
 // pooled or staging buffer can be reused while the device still reads it.
-// Command batching and native texture export are subsequent steps.
+// Windows can publish the final print into a D3D11 shared texture.
 //
 // Built everywhere but Apple (Windows and Linux). The Vulkan loader is not
 // linked: volk (engine/third_party/volk) opens libvulkan.so.1 / vulkan-1.dll
@@ -13,6 +13,13 @@
 #include "gpu.hpp"
 #include "file_path.hpp"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#define VK_USE_PLATFORM_WIN32_KHR
+#endif
 #include "volk.h"
 
 #include <algorithm>
@@ -52,7 +59,7 @@ std::string vk_error(const char* operation, VkResult result) {
     return std::string(operation) + " failed (VkResult " + std::to_string(int(result)) + ")";
 }
 
-struct KernelSpec { const char* name; uint32_t bindings; uint32_t workgroup; };
+struct KernelSpec { const char* name; uint32_t bindings; uint32_t workgroup; bool image_output = false; };
 constexpr KernelSpec kKernels[] = {
     {"spk_math_probe", 2, 1},
     {"spk_take_rgb", 3, kWorkgroup},
@@ -71,6 +78,7 @@ constexpr KernelSpec kKernels[] = {
     {"spk_print_exposure", 4, kWorkgroup},
     {"spk_cam16ucs_compress", 7, kWorkgroup},
     {"spk_cctf_encode_matrix", 4, kWorkgroup},
+    {"spk_display_texture", 3, 16, true},
     {"spk_to_rgba16", 3, kWorkgroup},
     {"spk_grain_layers", 8, kWorkgroup},
     {"spk_grain_layer_one", 8, kWorkgroup},
@@ -97,6 +105,7 @@ constexpr KernelSpec kKernels[] = {
     {"spk_scene_latitude", 4, kWorkgroup},
     {"spk_overscan_add_mask", 4, kWorkgroup},
     {"spk_scene_tone_reduce", 4, kWorkgroup},
+    {"spk_scene_tone_filter", 3, kWorkgroup},
     {"spk_scene_tone", 5, kWorkgroup},
 };
 
@@ -149,6 +158,11 @@ public:
         app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app.pApplicationName = "SpektraLab headless";
         app.apiVersion = VK_API_VERSION_1_0;
+#ifdef _WIN32
+        uint32_t loaderVersion = VK_API_VERSION_1_0;
+        if (vkEnumerateInstanceVersion && vkEnumerateInstanceVersion(&loaderVersion) == VK_SUCCESS &&
+            loaderVersion >= VK_API_VERSION_1_1) app.apiVersion = VK_API_VERSION_1_1;
+#endif
         VkInstanceCreateInfo create{};
         create.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         create.pApplicationInfo = &app;
@@ -227,8 +241,31 @@ public:
         device_create.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         device_create.queueCreateInfoCount = 1;
         device_create.pQueueCreateInfos = &queue_create;
+#ifdef _WIN32
+        const char* extensions[]{VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
+                                 VK_KHR_WIN32_KEYED_MUTEX_EXTENSION_NAME};
+        if (app.apiVersion >= VK_API_VERSION_1_1 && properties_.apiVersion >= VK_API_VERSION_1_1) {
+            uint32_t count = 0;
+            vkEnumerateDeviceExtensionProperties(physical_, nullptr, &count, nullptr);
+            std::vector<VkExtensionProperties> available(count);
+            if (vkEnumerateDeviceExtensionProperties(physical_, nullptr, &count, available.data()) == VK_SUCCESS &&
+                std::all_of(std::begin(extensions), std::end(extensions), [&](const char* required) {
+                    return std::any_of(available.begin(), available.end(), [&](const auto& ext) {
+                        return !std::strcmp(required, ext.extensionName);
+                    });
+                })) {
+                device_create.enabledExtensionCount = 2;
+                device_create.ppEnabledExtensionNames = extensions;
+            }
+        }
+#endif
         result = vkCreateDevice(physical_, &device_create, nullptr, &device_);
         if (result != VK_SUCCESS) { error = vk_error("vkCreateDevice", result); return false; }
+#ifdef _WIN32
+        if (device_create.enabledExtensionCount)
+            win32_memory_properties_ = reinterpret_cast<PFN_vkGetMemoryWin32HandlePropertiesKHR>(
+                vkGetDeviceProcAddr(device_, "vkGetMemoryWin32HandlePropertiesKHR"));
+#endif
         vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
 
         VkCommandPoolCreateInfo pool_create{};
@@ -505,7 +542,7 @@ public:
             if (!check_math_mode(detail)) fused_fma_ = 1;
         }
         const KernelSpec* spec = find_kernel(kernel);
-        if (!spec) { error = std::string("Vulkan kernel not ported: ") + (kernel ? kernel : "(null)"); return false; }
+        if (!spec || spec->image_output) { error = std::string("Vulkan kernel not ported: ") + (kernel ? kernel : "(null)"); return false; }
         if (args.size() != spec->bindings) {
             error = std::string(kernel) + ": wrong argument count";
             return false;
@@ -593,6 +630,9 @@ public:
         return submitted;
     }
 
+#ifdef _WIN32
+    bool write_d3d11_display(Buffer*, uint32_t, uint32_t, void*, const void*, BufferRef*, std::string&) override;
+#endif
     bool flush(std::string&) override { return true; }  // dispatch is synchronous for this milestone
     void* texture(Buffer* buffer, uint32_t width, uint32_t height,
                   uint32_t row_stride_px, std::string& error) override {
@@ -679,7 +719,7 @@ private:
     // Caller holds dispatch_mutex_: one queue and command pool, and synchronous
     // completion before any staging allocation or pooled buffer can be reused.
     template <typename Record>
-    bool submit_sync(Record&& record, const char* operation, std::string& error) {
+    bool submit_sync(Record&& record, const char* operation, std::string& error, const void* submitNext = nullptr) {
         VkCommandBufferAllocateInfo allocate_info{};
         allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocate_info.commandPool = command_pool_;
@@ -699,6 +739,7 @@ private:
             if (result == VK_SUCCESS) {
                 VkSubmitInfo submit{};
                 submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                submit.pNext = submitNext;
                 submit.commandBufferCount = 1;
                 submit.pCommandBuffers = &command;
                 result = vkQueueSubmit(queue_, 1, &submit, VK_NULL_HANDLE);
@@ -960,7 +1001,8 @@ private:
         std::vector<VkDescriptorSetLayoutBinding> bindings(spec.bindings);
         for (uint32_t i = 0; i < spec.bindings; ++i) {
             bindings[i].binding = i;
-            bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[i].descriptorType = spec.image_output && i + 1 == spec.bindings
+                ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[i].descriptorCount = 1;
             bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
@@ -1006,6 +1048,9 @@ private:
         return &pipelines_.emplace(spec.name, p).first->second;
     }
 
+#ifdef _WIN32
+    PFN_vkGetMemoryWin32HandlePropertiesKHR win32_memory_properties_ = nullptr;
+#endif
     std::string shader_dir_;
     VkInstance instance_ = VK_NULL_HANDLE;
     VkPhysicalDevice physical_ = VK_NULL_HANDLE;
@@ -1029,6 +1074,160 @@ private:
     PoolAudit audit_;
     size_t frame_high_water_ = 0;
 };
+
+#ifdef _WIN32
+bool VulkanGpu::write_d3d11_display(Buffer* rgb, uint32_t width, uint32_t height, void* handle,
+                                    const void* luid, BufferRef* retained, std::string& error) {
+    constexpr auto type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+    if (!win32_memory_properties_ || !rgb || !handle || !width || !height ||
+        uint64_t(width) * height * 12 != rgb->bytes || rgb->bytes > storage_range_limit_) {
+        error = "no compatible Vulkan display output"; return false;
+    }
+    VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+    VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &ids};
+    vkGetPhysicalDeviceProperties2(physical_, &props);
+    if (!ids.deviceLUIDValid || std::memcmp(luid, ids.deviceLUID, VK_LUID_SIZE) != 0) {
+        error = "Qt and Vulkan selected different adapters"; return false;
+    }
+    VkPhysicalDeviceExternalImageFormatInfo external{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO};
+    external.handleType = type;
+    VkPhysicalDeviceImageFormatInfo2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2, &external};
+    query.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    query.type = VK_IMAGE_TYPE_2D;
+    query.tiling = VK_IMAGE_TILING_OPTIMAL;
+    query.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    VkExternalImageFormatProperties support{VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES};
+    VkImageFormatProperties2 format{VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2, &support};
+    if (vkGetPhysicalDeviceImageFormatProperties2(physical_, &query, &format) != VK_SUCCESS ||
+        !(support.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT) ||
+        width > format.imageFormatProperties.maxExtent.width || height > format.imageFormatProperties.maxExtent.height) {
+        error = "Vulkan cannot import this shared FP16 storage image"; return false;
+    }
+
+    auto exact = alloc_persistent(retained ? size_t(width)*height*8 : sizeof(uint32_t), error);
+    if (!exact) return false;
+    std::lock_guard lock(dispatch_mutex_);
+    struct Imported {
+        VkDevice device;
+        VkImage image{};
+        VkDeviceMemory memory{};
+        VkImageView view{};
+        VkDescriptorPool pool{};
+        ~Imported() {
+            if (pool) vkDestroyDescriptorPool(device, pool, nullptr);
+            if (view) vkDestroyImageView(device, view, nullptr);
+            if (image) vkDestroyImage(device, image, nullptr);
+            if (memory) vkFreeMemory(device, memory, nullptr);
+        }
+    } target{device_};
+    auto checked = [&](VkResult result, const char* name) {
+        if (result == VK_SUCCESS) return true;
+        error = vk_error(name, result);
+        return false;
+    };
+    VkExternalMemoryImageCreateInfo extImage{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+    extImage.handleTypes = type;
+    VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &extImage};
+    ci.imageType = query.type;
+    ci.format = query.format;
+    ci.extent = {width, height, 1};
+    ci.mipLevels = ci.arrayLayers = 1;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling = query.tiling;
+    ci.usage = query.usage;
+    if (!checked(vkCreateImage(device_, &ci, nullptr, &target.image), "create display image")) return false;
+    VkMemoryRequirements req{};
+    vkGetImageMemoryRequirements(device_, target.image, &req);
+    VkMemoryWin32HandlePropertiesKHR hp{VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR};
+    if (!checked(win32_memory_properties_(device_, type, handle, &hp), "query D3D11 memory")) return false;
+    uint32_t bits = req.memoryTypeBits & hp.memoryTypeBits;
+    uint32_t index = 0;
+    for (; index < memory_properties_.memoryTypeCount; ++index)
+        if ((bits & (1u << index)) && (memory_properties_.memoryTypes[index].propertyFlags &
+                                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) break;
+    if (index == memory_properties_.memoryTypeCount) { error = "no device-local import memory type"; return false; }
+    VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+    dedicated.image = target.image;
+    VkImportMemoryWin32HandleInfoKHR import{VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR, &dedicated};
+    import.handleType = type;
+    import.handle = handle;
+    VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &import};
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = index;
+    if (!checked(vkAllocateMemory(device_, &alloc, nullptr, &target.memory), "import D3D11 memory") ||
+        !checked(vkBindImageMemory(device_, target.image, target.memory, 0), "bind display memory")) return false;
+
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = target.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = ci.format;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (!checked(vkCreateImageView(device_, &vi, nullptr, &target.view), "create display image view")) return false;
+    auto* pipeline = get_pipeline(*find_kernel("spk_display_texture"), error);
+    if (!pipeline) return false;
+    VkDescriptorPoolSize sizes[]{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}};
+    VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pool.maxSets = 1;
+    pool.poolSizeCount = 2;
+    pool.pPoolSizes = sizes;
+    if (!checked(vkCreateDescriptorPool(device_, &pool, nullptr, &target.pool), "create display descriptors")) return false;
+    VkDescriptorSetAllocateInfo sets{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    sets.descriptorPool = target.pool;
+    sets.descriptorSetCount = 1;
+    sets.pSetLayouts = &pipeline->descriptors;
+    VkDescriptorSet set{};
+    if (!checked(vkAllocateDescriptorSets(device_, &sets, &set), "allocate display descriptors")) return false;
+    VkDescriptorBufferInfo source{rgb->handle, 0, rgb->bytes};
+    VkDescriptorBufferInfo codes{exact.get()->handle, 0, exact.get()->bytes};
+    VkDescriptorImageInfo dest{VK_NULL_HANDLE, target.view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet writes[3]{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = i==2 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    }
+    writes[0].pBufferInfo = &source;
+    writes[1].pBufferInfo = &codes;
+    writes[2].pImageInfo = &dest;
+    vkUpdateDescriptorSets(device_, 3, writes, 0, nullptr);
+
+    const uint64_t acquire = 0, release = 1;
+    const uint32_t timeout = 2000;
+    VkWin32KeyedMutexAcquireReleaseInfoKHR keys{VK_STRUCTURE_TYPE_WIN32_KEYED_MUTEX_ACQUIRE_RELEASE_INFO_KHR};
+    keys.acquireCount = keys.releaseCount = 1;
+    keys.pAcquireSyncs = keys.pReleaseSyncs = &target.memory;
+    keys.pAcquireKeys = &acquire;
+    keys.pAcquireTimeouts = &timeout;
+    keys.pReleaseKeys = &release;
+    const bool done = submit_sync([&](VkCommandBuffer command) {
+        device_barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        b.image = target.image;
+        b.subresourceRange = vi.subresourceRange;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // first use; no D3D contents to preserve
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+        b.dstQueueFamilyIndex = queue_family_;
+        b.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b);
+        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
+        vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->layout, 0, 1, &set, 0, nullptr);
+        vkCmdDispatch(command, (width + 15) / 16, (height + 15) / 16, 1);
+        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = 0;
+        b.srcQueueFamilyIndex = queue_family_;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b);
+    }, "publish D3D11 display texture", error, &keys);
+    if (done && retained) *retained = std::move(exact);
+    return done;
+}
+#endif
 
 }  // namespace
 

@@ -4,6 +4,7 @@
 
 #include "core/json.hpp"
 #include "half_frame_pair.hpp"
+#include "preview_size.hpp"
 #include "io/raw_decoder.hpp"
 #include "spektrafilm/spk_engine.h"
 #include <array>
@@ -11,6 +12,10 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <mutex>
+#ifdef _WIN32
+#include "gpu/d3d11_target.hpp"
+#endif
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -21,6 +26,7 @@
 
 namespace spk::desktop {
 
+enum class FrameUse { display, pixels };
 enum class DecodeMode { compatible16, headroom };
 
 struct Stock {
@@ -452,7 +458,7 @@ public:
     std::string overscan_geometry;
     // The whole decode, undeveloped, for framing a cut picture in the gate
     // (README §4: the guide over the undeveloped picture): top-down BGRA8
-    // sRGB, long edge at most 2048. Shared between the frames of one decode;
+    // sRGB, capped at the configured preview long edge. Shared between the frames of one decode;
     // null until a frame of it is cut.
     struct SourcePreview {
         std::uint32_t width = 0, height = 0;
@@ -486,7 +492,10 @@ public:
     bool full_tier = true;
     std::uint32_t logical_width = 0, logical_height = 0;
 
-    const spk_result& pixels() const noexcept { return result_; }
+    const spk_result& pixels() const;
+#ifdef _WIN32
+    std::shared_ptr<gpu::D3D11Publication> display;
+#endif
     std::uint32_t width() const noexcept { return result_.width; }
     std::uint32_t height() const noexcept { return result_.height; }
     std::uint32_t logicalWidth() const noexcept { return logical_width ? logical_width : result_.width; }
@@ -496,7 +505,10 @@ public:
 
 private:
     Frame() = default;
-    spk_result result_{};
+    mutable spk_result result_{};
+#ifdef _WIN32
+    mutable std::mutex pixelsMutex_;
+#endif
     // A composed frame's own pixels (a pair's prints cut together):
     // result_.rgba16 points here and result_.texture is null.
     std::vector<std::uint16_t> owned_;
@@ -520,6 +532,9 @@ struct HostOptions {
     // half-float image from pixels() and turns this off: at 33 MP the copy
     // is 132 MB per frame nobody reads.
     bool bgra8_display = true;
+#ifdef _WIN32
+    std::function<std::shared_ptr<gpu::D3D11Publication>(const OutputEncoding&)> beginDisplay;
+#endif
     // The engine's `live` tier long edge (io.preview_long_edge, 800..8192),
     // which a Tier::live call renders at; macOS calls it the preview
     // resolution. 0: no live tier -- every call renders the full frame, as
@@ -579,7 +594,7 @@ public:
     // session on the newly cut picture from the retained decode.
     FramePtr open_raw(const std::filesystem::path& source, DecodeMode mode,
                       const RenderSettings& settings = RenderSettings(), const EngineCut& geometry = EngineCut(),
-                      Tier tier = Tier::full);
+                      Tier tier = Tier::full, FrameUse use = FrameUse::display);
     // Only changed settings are sent. Print-side edits request spk_reprint;
     // the result's actual cache flag determines whether reuse occurred.
     // A failure never mutates the previously returned Frame. Settings that
@@ -591,7 +606,8 @@ public:
     // full frame after a live one) sends nothing, and is the one render
     // cancel_full_render may stop: it then throws RenderCancelled and keeps
     // the session.
-    FramePtr render(const RenderSettings& settings, const EngineCut& geometry = EngineCut(), Tier tier = Tier::full);
+    FramePtr render(const RenderSettings& settings, const EngineCut& geometry = EngineCut(), Tier tier = Tier::full,
+                    FrameUse use = FrameUse::display);
     // From any thread: stop a cancellable full render in flight, if any (a
     // no-op otherwise). Never waits for it.
     void cancel_full_render() noexcept;

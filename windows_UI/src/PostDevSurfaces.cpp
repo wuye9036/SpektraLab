@@ -50,11 +50,14 @@ SourceMap shownSourceMap(const FramePtr& frame, const output::Geometry& geometry
 FrameGrade exportGrade(const Params& params) {
     if (Grade(params).isIdentity()) return {};
     return [params](QImage& image, const OutputEncoding& encoding) {
-        const auto midGrey = midGreyFor(display::colorSpace(encoding));
+        const auto space = display::colorSpace(encoding);
+        const auto midGrey = midGreyFor(space);
         if (!midGrey)
             throw std::runtime_error("Post-Dev cannot grade a frame encoded in " + encoding.color_space +
                                      (encoding.cctf_encoding ? std::string() : std::string(" (linear)")));
-        Grade(params, *midGrey).apply(image);
+        Grade grade(params, *midGrey, space);
+        grade.prepareToneGuide(image);
+        gradeImage(image, grade, {});
     };
 }
 

@@ -602,14 +602,15 @@ int main(int argc,char** argv) {
                       c.postDevParams().curves.rgb.isIdentity(),"The curve's ends stay; an interior point goes");
                 c.undo();
                 check(c.setColorZone("shadows",210,.4)&&c.setPostDev("colorBalance.shadows.luminance",-.2)&&
-                      c.setPostDev("vignette.amount",-35.)&&c.setPostDev("exposure",.25)&&c.setPostDev("contrast",10.),
-                      "Wheel, arc, vignette and exposure edits");
+                      c.setPostDev("vignette.amount",-35.)&&c.setPostDev("exposure",.25)&&c.setPostDev("contrast",10.)&&
+                      c.setPostDev("shadows",40.)&&c.setPostDev("highlights",-35.),
+                      "Wheel, vignette, exposure, contrast and local tone edits");
                 check(c.frame()==frame&&operations.size()==operationsBefore&&!c.busy(),"No Post-Dev edit started an operation");
                 // The surfaces the controller grades itself: the strip's
                 // thumbnail and the histogram, each the canvas's frame graded.
                 const auto map=postdev::sourceMap(QSize(int(frame->width()),int(frame->height())),
                                                   {c.cropRect(),c.quarterTurns(),c.flipHorizontal(),c.flipVertical(),c.straightenDegrees()});
-                const auto grade=postdev::gradeFor(c.postDevParams(),c.navigatorImage().colorSpace());
+                const auto grade=postdev::gradeFor(c.postDevParams(),c.navigatorImage().colorSpace(),c.postDevToneSource());
                 check(bool(grade),"The grade applies to the session's encoding");
                 QImage expectedThumb=spk::desktop::display::thumbnailImage(c.navigatorImage());
                 postdev::gradeImage(expectedThumb,*grade,map);
@@ -776,6 +777,32 @@ int main(int argc,char** argv) {
             check(!c.failed()&&renders==1&&c.frame()!=developing&&c.frame()->full_tier&&near(c.straightenDegrees(),-3.5)&&
                   c.previewImage().devicePixelRatio()==1&&sameImage(c.previewImage(),output::displayFrame(c.frame(),geometry(c))),
                   "The straighten survives the full frame landing: the one full render, at the straighten's angle");
+
+            // Keep moving faster than the old debounce. The canvas must
+            // publish while the gesture is open and the control must keep
+            // the user's latest value while earlier samples land.
+            int moves=0, previews=0;
+            double desiredExposure=c.exposureEv();
+            bool controlsFollow=true;
+            auto samples=QObject::connect(&c,&PreviewController::frameChanged,&c,[&]{
+                if (!c.frame()->full_tier) ++previews;
+                controlsFollow &= near(c.exposureEv(),desiredExposure);
+            });
+            QTimer mouse;
+            QObject::connect(&mouse,&QTimer::timeout,&c,[&]{
+                desiredExposure=-1.0+.01*(moves++%150);
+                c.setExposureEv(desiredExposure);
+            });
+            c.beginEditGesture("exposureEv");
+            mouse.start(10);
+            waitFor([&]{return previews>=3 || moves>=500;},"Previews during continuous slider input");
+            mouse.stop();
+            check(previews>=3 && controlsFollow,"Drag samples land without rewinding the slider");
+            QObject::disconnect(samples);
+            c.setExposureEv(.73);
+            c.endEditGesture();
+            waitFor(fullFrame,"The released slider lands at full resolution");
+            check(near(c.frame()->settings.print_exposure,std::exp2(-.73)),"Release renders the final slider value");
         }
         report["passed"]=true;
     } catch(const std::exception& error) {

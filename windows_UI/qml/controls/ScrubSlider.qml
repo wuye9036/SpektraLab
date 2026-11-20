@@ -145,8 +145,10 @@ ParamRow {
             MouseArea {
                 id: trackArea
                 anchors.fill: parent
+                preventStealing: true
                 property real dragStart: 0
                 property real pressX: 0
+                property real lastX: 0
                 // Set by the second press of a double-click: the value has
                 // gone to the default and the rest of that press is ignored.
                 property bool resetting: false
@@ -154,20 +156,23 @@ ParamRow {
                     valueBox.finishWheel()
                     slider.beginGesture()
                     resetting = false
-                    pressX = mouse.x
+                    lastX = pressX = mouse.x
                     var target = slider.from + Math.max(0, Math.min(1, (mouse.x - Theme.knobWidth / 2) / Math.max(1, track.usable))) * (slider.to - slider.from)
                     dragStart = Math.abs(target - slider.value) > Math.abs(slider.to - slider.from) * 0.03 ? target : slider.value
                     slider.pendingValue = slider.value
                     if (dragStart !== slider.value) slider.apply(dragStart)
                 }
-                onPositionChanged: function(mouse) {
+                function updateDrag(mouse) {
                     if (resetting) return
+                    lastX = mouse.x
                     var gain = (mouse.modifiers & (Qt.ControlModifier | Qt.AltModifier)) ? 0.25 : 1
                     var v = dragStart + (mouse.x - pressX) / Math.max(1, track.usable) * (slider.to - slider.from) * gain
                     if ((mouse.modifiers & Qt.ShiftModifier) && slider.snap > 0) v = Math.round(v / slider.snap) * slider.snap
                     slider.apply(v)
                 }
-                onReleased: {
+                onPositionChanged: function(mouse) { if (pressed) updateDrag(mouse) }
+                onReleased: function(mouse) {
+                    if (mouse.x !== lastX) updateDrag(mouse)
                     if (!slider.live) slider.moved(slider.pendingValue)
                     slider.committed(slider.live ? slider.value : slider.pendingValue)
                     slider.endGesture()

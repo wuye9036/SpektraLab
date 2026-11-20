@@ -63,6 +63,7 @@ layout(binding = 1) uniform sampler2D frameTexture;
 #if LUT_MODE != 3
 // 256 x 5, postdev::curveTables(); only fetched.
 layout(binding = 4) uniform sampler2D postdevCurves;
+layout(binding = 6) uniform sampler2D toneGuide;
 #endif
 #if LUT_MODE == 1
 layout(binding = 2) uniform sampler3D lutTexture;
@@ -352,7 +353,7 @@ void main()
     vec4 c = texture(frameTexture, vTexCoord);
     vec3 rgb = clamp(c.a > 0.0 ? c.rgb / c.a : vec3(0.0), 0.0, 1.0);
     vec3 t = vec3(vTexCoord, 1.0);
-    rgb = postdev(rgb, vec2(dot(sourceU.xyz, t), dot(sourceV.xyz, t)), grade, postdevCurves);
+    rgb = postdev(rgb, vec2(dot(sourceU.xyz, t), dot(sourceV.xyz, t)), grade, postdevCurves, toneGuide);
 #if PROOF
     float flag;
     vec3 lin = proofLinear(clamp(rgb, 0.0, 1.0), flag);

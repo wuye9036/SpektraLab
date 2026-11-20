@@ -51,7 +51,7 @@ Params paramsFrom(const QVariantMap& map, QString* error = nullptr);
 // nothing to apply (bypassed or identity params) or when the encoding is one
 // Post-Dev must not grade (midGreyFor: linear data, an unknown curve). An
 // invalid (untagged) space is sRGB, as the canvas draws it.
-std::optional<Grade> gradeFor(const Params& params, const QColorSpace& space);
+std::optional<Grade> gradeFor(const Params& params, const QColorSpace& space, const QImage& source = {}, const QImage& preparedGuide = {});
 
 // Grade::pixel over every pixel of `image` in place, each at the source
 // position `map` gives its centre ((x + 0.5) / W, (y + 0.5) / H). Half float

@@ -144,11 +144,20 @@ Item {
         anchors.fill: parent
         enabled: !editor.active
         cursorShape: Qt.SizeHorCursor
+        preventStealing: true
         property real pressX: 0
+        property real lastX: 0
         property real startValue: 0
         property bool scrubbing: false
-        onPressed: function(mouse) { box.finishWheel(); pressX = mouse.x; startValue = box.value; scrubbing = false }
-        onPositionChanged: function(mouse) {
+        onPressed: function(mouse) {
+            box.finishWheel()
+            typingTimer.stop()
+            lastX = pressX = mouse.x
+            startValue = box.value
+            scrubbing = false
+        }
+        function updateScrub(mouse) {
+            lastX = mouse.x
             var dx = mouse.x - pressX
             if (!scrubbing) {
                 if (Math.abs(dx) < 3) return
@@ -161,9 +170,11 @@ Item {
             if (box.step > 0) v = Math.round(v / box.step) * box.step
             box.edited(box.clamp(v))
         }
-        onReleased: {
+        onPositionChanged: function(mouse) { if (pressed) updateScrub(mouse) }
+        onReleased: function(mouse) {
+            if (mouse.x !== lastX) updateScrub(mouse)
             if (scrubbing) { scrubbing = false; box.editFinished() }
-            else typingTimer.restart()
+            else if (contains(Qt.point(mouse.x, mouse.y))) typingTimer.restart()
         }
         onCanceled: if (scrubbing) { scrubbing = false; box.editFinished() }
         onDoubleClicked: { typingTimer.stop(); box.resetRequested() }

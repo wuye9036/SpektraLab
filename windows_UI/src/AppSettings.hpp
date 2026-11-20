@@ -38,6 +38,7 @@
 class AppSettings final:public QObject {
     Q_OBJECT
     Q_PROPERTY(QString filePath READ filePath CONSTANT)
+    Q_PROPERTY(int previewLongEdge READ previewLongEdge NOTIFY changed)
     Q_PROPERTY(int revision READ revision NOTIFY changed)
     // Empty, or the last read or write failure in English, for the Settings
     // window's Diagnostics page.
@@ -58,6 +59,7 @@ public:
     static QVariant readValue(const QString& filePath,const QString& key);
 
     QString filePath() const {return path_;}
+    int previewLongEdge() const;
     int revision() const {return revision_;}
     QString lastError() const {return error_;}
     // The object as it will be written, unknown keys included (tests).

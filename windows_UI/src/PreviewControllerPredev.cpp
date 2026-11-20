@@ -621,9 +621,7 @@ void PreviewController::resolvePendingPlacement() {
     // (Session.finishPastedPlacement, :3833-3839): no undo step.
     extra_settings_ = std::move(next);
     saveActiveSettings();
-    ++settings_revision_;
-    auto_apply_.stop();
-    schedulePreview();
+    settingsEdited();
     status_ = uiText("status.updatingPreview");
     emit settingsChanged();
     emit stateChanged();

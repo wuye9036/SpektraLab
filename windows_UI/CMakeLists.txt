@@ -361,7 +361,7 @@ endif()
 # every target the canvas uses; glslang checks it as GLSL 450 as well.
 if(BUILD_TESTING)
     find_package(Qt6 6.8 REQUIRED COMPONENTS ShaderTools GuiPrivate)
-    qt_add_executable(spk_qt_postdev_test tests/postdev.cpp src/PostDev.hpp src/PostDev.cpp)
+    qt_add_executable(spk_qt_postdev_test tests/postdev.cpp src/PostDev.hpp)
     target_include_directories(spk_qt_postdev_test PRIVATE src)
     target_compile_features(spk_qt_postdev_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_postdev_test PRIVATE Qt6::Core Qt6::Gui Qt6::GuiPrivate)
@@ -388,7 +388,7 @@ endif()
 # rail's Post-Dev side edits it (PreviewControllerPostDev.cpp, qml/right/
 # PostDev*.qml). The model and canvas half needs no engine; the controller
 # half rides with PreviewController.cpp in every target that builds it.
-set(spektralab_postdev_core_sources src/PostDev.hpp src/PostDev.cpp src/PostDevView.hpp src/PostDevView.cpp)
+set(spektralab_postdev_core_sources src/PostDev.hpp src/PostDevView.hpp src/PostDevView.cpp)
 set(spektralab_postdev_controller_sources ${spektralab_postdev_core_sources}
     src/PostDevSurfaces.hpp src/PostDevSurfaces.cpp src/PreviewControllerPostDev.cpp)
 target_sources(SpektraLabQt PRIVATE ${spektralab_postdev_controller_sources})
@@ -406,7 +406,7 @@ if(BUILD_TESTING)
     endforeach()
     # The store parses `state.postDev`; the canvas test grades on WARP and on
     # the CPU; the recipe test grades an export through Job::grade.
-    target_sources(spk_qt_edit_store_test PRIVATE src/PostDev.cpp)
+    target_sources(spk_qt_edit_store_test PRIVATE src/PostDev.hpp)
     target_sources(spk_qt_color_canvas_test PRIVATE ${spektralab_postdev_core_sources})
     target_sources(spk_qt_recipe_export_test PRIVATE ${spektralab_postdev_core_sources}
         src/PostDevSurfaces.hpp src/PostDevSurfaces.cpp)
@@ -430,7 +430,7 @@ if(BUILD_TESTING)
     # The pair's model without an engine, a GPU or a RAW: the record's round
     # trip and its unknown fields, where each edit of the rails lands (the
     # picked frame, + Film, the film), what the engine is handed, undo states.
-    qt_add_executable(spk_qt_pairs_test tests/pairs.cpp src/HalfFramePair.cpp src/EditStore.cpp src/PostDev.cpp)
+    qt_add_executable(spk_qt_pairs_test tests/pairs.cpp src/HalfFramePair.cpp src/EditStore.cpp src/PostDev.hpp)
     target_include_directories(spk_qt_pairs_test PRIVATE src)
     target_compile_features(spk_qt_pairs_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_pairs_test PRIVATE spk_desktop_host Qt6::Core Qt6::Gui)
@@ -479,7 +479,7 @@ endif()
 if(BUILD_TESTING)
     # The preferences file: paths, round trip, atomic writes, unknown keys.
     qt_add_executable(spk_qt_app_settings_test tests/app_settings.cpp src/AppSettings.hpp src/AppSettings.cpp)
-    target_include_directories(spk_qt_app_settings_test PRIVATE src)
+    target_include_directories(spk_qt_app_settings_test PRIVATE src "${CMAKE_CURRENT_SOURCE_DIR}/../engine/src")
     target_compile_features(spk_qt_app_settings_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_app_settings_test PRIVATE Qt6::Core Qt6::Qml)
     add_test(NAME spk_qt_app_settings COMMAND spk_qt_app_settings_test "${CMAKE_CURRENT_BINARY_DIR}/app-settings-test")
@@ -550,3 +550,24 @@ if(BUILD_TESTING)
     add_test(NAME spk_qt_flat_input COMMAND spk_qt_flat_input_test
         "$<TARGET_FILE_DIR:SpektraLabQt>/resources" "${CMAKE_CURRENT_BINARY_DIR}/flat-input-test")
 endif()
+
+# Share the Post-Dev implementation between the editor and the standalone
+# GUI/host tests. FrameImage also uses its compute service for reduced images.
+add_library(spk_qt_postdev_core STATIC src/PostDev.cpp)
+target_include_directories(spk_qt_postdev_core PRIVATE ../engine/src)
+target_compile_features(spk_qt_postdev_core PUBLIC cxx_std_20)
+target_link_libraries(spk_qt_postdev_core PUBLIC Qt6::Gui)
+if(WIN32)
+    target_sources(spk_qt_postdev_core PRIVATE src/PostDevGpu.cpp)
+    target_link_libraries(spk_qt_postdev_core PRIVATE Qt6::GuiPrivate d3d11 d3dcompiler)
+    qt_add_resources(spk_qt_postdev_core "spk_tone_kernels" PREFIX "/" FILES shaders/postdev_analysis.hlsl)
+    qt_add_shaders(spk_qt_postdev_core "spk_tone_grade" PREFIX "/" GLSL "430" HLSL 50
+        DEFINES "POSTDEV_GLSL_SHA1=x${spk_postdev_glsl_sha1}" FILES shaders/postdev_image.comp)
+endif()
+get_property(spk_ui_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(target IN LISTS spk_ui_targets)
+    get_target_property(sources ${target} SOURCES)
+    if("src/PostDev.hpp" IN_LIST sources OR "src/FrameImage.cpp" IN_LIST sources)
+        target_link_libraries(${target} PRIVATE spk_qt_postdev_core)
+    endif()
+endforeach()

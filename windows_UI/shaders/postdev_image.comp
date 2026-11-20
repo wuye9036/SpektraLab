@@ -1,0 +1,37 @@
+#version 440
+#extension GL_GOOGLE_include_directive : enable
+#include "postdev.glsl"
+layout(local_size_x=16,local_size_y=16) in;
+layout(std140,binding=0) uniform Settings {
+    PostDev grade;
+    vec4 sourceX;
+    vec4 sourceY;
+    ivec4 tile; // left, top, width, height
+    vec2 imageSizePx;
+    ivec2 sourceOrigin;
+    int histogramStride;
+} cfg;
+layout(binding=1) uniform sampler2D pixels;
+layout(binding=2) uniform sampler2D curves;
+layout(binding=3) uniform sampler2D guide;
+layout(std430,binding=4) buffer Result { uint words[]; } dst;
+void main() {
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(p,cfg.tile.zw))) return;
+    vec3 uv=vec3((vec2(p+cfg.tile.xy)+.5)/cfg.imageSizePx,1);
+    vec2 sourceUv=vec2(dot(uv,cfg.sourceX.xyz),dot(uv,cfg.sourceY.xyz));
+    ivec2 pixel=p+cfg.tile.xy;
+    if(cfg.histogramStride>0 && any(notEqual(pixel%cfg.histogramStride,ivec2(0)))) return;
+    vec4 c=texelFetch(pixels,pixel-cfg.sourceOrigin,0);
+    c.rgb=postdev(c.rgb,sourceUv,cfg.grade,curves,guide);
+    if(cfg.histogramStride>0) {
+        // Match the half-float navigator at the histogram boundary.
+        vec3 step=exp2(max(vec3(-24),vec3(floatBitsToUint(abs(c.rgb))>>23)-137.0));
+        vec3 rgb=clamp(roundEven(c.rgb/step)*step,0,1);
+        uvec4 bins=uvec4(vec4(rgb,postdevLuma(rgb))*255.0+.5);
+        for(uint i=0;i<4;++i) atomicAdd(dst.words[i*256+bins[i]],1);
+    } else {
+        uint at=uint(p.y*cfg.tile.z+p.x)*4;
+        for(uint i=0;i<4;++i) dst.words[at+i]=floatBitsToUint(c[i]);
+    }
+}

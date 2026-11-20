@@ -1,3 +1,4 @@
+#include "core/tone_guide.hpp"
 // scene_latitude.cpp -- RFC-023's Scene Latitude Mapping, the pipeline half.
 //
 // Kept out of `pipeline.cpp` for the same reason `contrast_mask.cpp` is: the
@@ -43,41 +44,15 @@ constexpr double kSceneToneRampStops = 3.0;
 // guided filter's edge threshold in stops squared: a region whose brightness
 // varies by more than ~0.7 stop inside the window is treated as edges the
 // base follows, less as texture it smooths over. Fixed, not on the wire.
-constexpr double kSceneToneScale = 0.03;
-constexpr double kSceneToneEps = 0.5;
+constexpr double kSceneToneScale = tone_guide::scale;
 // The grid is canonical, as RFC-024's mask grid is: `kCellsPerSigma` cells
 // per sigma on the long edge, never fewer than `kGridMinLongEdge`, never more
 // than the image's own pixels -- so the meter's sample, the live tier and the
 // full tier derive the same base from their own pixels.
 constexpr double kSceneToneCellsPerSigma = 4.0;
-constexpr uint32_t kSceneToneGridMin = 512;
+constexpr uint32_t kSceneToneGridMin = tone_guide::gridLimit;
 // The stop axis is held to +/- this; a black pixel sits on the floor.
 constexpr float kSceneToneFloorStops = -20.0f;
-
-// A box mean over a clamped window along one axis, normalised by the count
-// the window holds (contrast_mask.cpp's boundary rule, repeated here rather
-// than shared so the mask's research path is left exactly as it is).
-void tone_box_1d(const std::vector<double>& in, std::vector<double>& out, uint32_t w, uint32_t h, int r,
-                 bool horizontal) {
-    out.assign(in.size(), 0.0);
-    const uint32_t len = horizontal ? w : h, lines = horizontal ? h : w;
-    std::vector<double> prefix(len + 1);
-    for (uint32_t line = 0; line < lines; ++line) {
-        auto at = [&](uint32_t k) { return horizontal ? size_t(line) * w + k : size_t(k) * w + line; };
-        prefix[0] = 0.0;
-        for (uint32_t k = 0; k < len; ++k) prefix[k + 1] = prefix[k] + in[at(k)];
-        for (uint32_t k = 0; k < len; ++k) {
-            const int lo = std::max(0, int(k) - r), hi = std::min(int(len) - 1, int(k) + r);
-            out[at(k)] = (prefix[size_t(hi) + 1] - prefix[size_t(lo)]) / double(hi - lo + 1);
-        }
-    }
-}
-
-void tone_box(const std::vector<double>& in, std::vector<double>& out, uint32_t w, uint32_t h, int r) {
-    std::vector<double> tmp;
-    tone_box_1d(in, tmp, w, h, r, true);
-    tone_box_1d(tmp, out, w, h, r, false);
-}
 
 }  // namespace
 
@@ -111,33 +86,32 @@ bool Pipeline::node_scene_tone(const Image& in, Image& out, std::string& error) 
                         {gpu::Arg::buf(in.buf), gpu::Arg::buf(p_buf), gpu::Arg::inline_bytes(meta, 4),
                          gpu::Arg::buf(grid)},
                         size_t(gw) * gh, error)) return false;
+#ifdef _WIN32
+    // Vulkan keeps the moments, the coefficients and the output on device.
+    const size_t bytes = size_t(gw) * gh * 2 * sizeof(float);
+    auto first = gpu_->alloc(bytes, error);
+    auto second = gpu_->alloc(bytes, error);
+    if (!first || !second) return false;
+    auto coef_buf = grid;
+    const auto radius = uint32_t(std::max(1L, std::lround(std::max(.5, kSceneToneScale * cells) / .816)));
+    for (uint32_t pass = 0; pass < 4; ++pass) {
+        const uint32_t filter_meta[] = {gw, gh, radius, pass};
+        auto output = pass % 2 ? second : first;
+        if (!gpu_->dispatch("spk_scene_tone_filter",
+                            {gpu::Arg::buf(coef_buf), gpu::Arg::inline_bytes(filter_meta, 4), gpu::Arg::buf(output)},
+                            size_t(gw) * gh, error)) return false;
+        coef_buf = output;
+    }
+#else
     // The host needs the values: the one flush this node cannot avoid.
     if (!gpu_->flush(error)) return false;
     std::vector<float> grid_values(size_t(gw) * gh);
     if (!gpu_->read(grid.get(), 0, grid_values.data(), grid_values.size() * sizeof(float), error)) return false;
     std::vector<double> x(grid_values.begin(), grid_values.end());
 
-    // --- the base: He, Sun & Tang's guided filter, self-guided ------------
-    // Two box passes of radius r have a standard deviation of ~0.816 r, so r
-    // matches a Gaussian of the scale's sigma. The coefficients go to the GPU
-    // and the base is `a * x + b` at each pixel's own `x`: smooth inside a
-    // region, following the pixel across an edge, so no halo rings an edge.
-    const double sigma = std::max(0.5, kSceneToneScale * double(cells));
-    const int r = std::max(1, int(std::lround(sigma / 0.816)));
-    std::vector<double> mean_x, x2(x.size()), mean_x2, ak(x.size()), bk(x.size()), a, b;
-    for (size_t i = 0; i < x.size(); ++i) x2[i] = x[i] * x[i];
-    tone_box(x, mean_x, gw, gh, r);
-    tone_box(x2, mean_x2, gw, gh, r);
-    for (size_t i = 0; i < x.size(); ++i) {
-        const double var = std::max(0.0, mean_x2[i] - mean_x[i] * mean_x[i]);
-        ak[i] = var / (var + kSceneToneEps);
-        bk[i] = mean_x[i] - ak[i] * mean_x[i];
-    }
-    tone_box(ak, a, gw, gh, r);
-    tone_box(bk, b, gw, gh, r);
-    std::vector<float> coef(2 * x.size());
-    for (size_t i = 0; i < x.size(); ++i) { coef[2 * i] = float(a[i]); coef[2 * i + 1] = float(b[i]); }
+    const auto coef = tone_guide::coefficients(x, gw, gh);
     gpu::BufferRef coef_buf = gpu_->upload(coef.data(), coef.size() * sizeof(float), error);
+#endif
     if (!coef_buf || !alloc_like(in, out, error)) return false;
 
     // --- the move, per pixel ----------------------------------------------

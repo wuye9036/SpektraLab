@@ -38,7 +38,13 @@ bool Blur::fir(const Image& img, const double sigmas[3], double truncate, const 
         else { kernels[c].assign(1, 1.0); radii[c] = 0; }
     }
     const size_t R = std::max(radii[0], std::max(radii[1], radii[2]));
-    if (R == 0 && active[0] && active[1] && active[2] && !acc) { out = img; return true; }
+    if (R == 0 && !acc) {
+        // A one-tap kernel preserves the pixel, but the first component of a
+        // mixture still contributes only its channel weights.
+        if (!weight) { out = img; return true; }
+        const double zero[3] = {};
+        return affine(img, weight, zero, out, error);
+    }
 
     std::vector<float> table(3 * (2 * R + 1), 0.0f);
     for (int c = 0; c < 3; ++c) {

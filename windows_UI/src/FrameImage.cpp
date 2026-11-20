@@ -1,4 +1,7 @@
 #include "FrameImage.hpp"
+#ifdef Q_OS_WIN
+#include "PostDevGpu.hpp"
+#endif
 #include "core/colour.hpp"
 #include <QColorTransform>
 #include <QList>
@@ -150,6 +153,9 @@ QImage downscaled(const QImage& image,QSize bound) {
     const double scale=std::min(double(bound.width())/width,double(bound.height())/height);
     const int outWidth=std::clamp(int(std::lround(width*scale)),1,std::min(width,bound.width()));
     const int outHeight=std::clamp(int(std::lround(height*scale)),1,std::min(height,bound.height()));
+#ifdef Q_OS_WIN
+    return postdev::gpuDownscaled(image,{outWidth,outHeight});
+#endif
     QImage output(outWidth,outHeight,QImage::Format_RGBX16FPx4);
     if(output.isNull())fail("Cannot allocate the reduced display image");
     const Axis columns=areaAxis(width,outWidth),rows=areaAxis(height,outHeight);
@@ -302,6 +308,9 @@ std::vector<float> histogram(const QImage& image) {
     if(image.isNull()||image.format()!=QImage::Format_RGBX16FPx4)return bins;
     const int width=image.width(),height=image.height();
     const int stride=std::max(1,int(std::sqrt(double(width)*height/kHistogramSamples)));
+#ifdef Q_OS_WIN
+    return postdev::gpuHistogram(image,stride);
+#endif
     std::vector<std::uint32_t> counts(4*kHistogramBins,0);
     auto bin=[](float v){return int((v>0.f?(v<1.f?v:1.f):0.f)*255.f+0.5f);};
     for(int y=0;y<height;y+=stride) {

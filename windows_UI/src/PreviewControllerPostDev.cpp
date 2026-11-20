@@ -12,6 +12,9 @@
 // (SpektrafilmApp.swift:171-173); nothing re-renders, because Layer 2 never
 // reaches the engine (Renderer.swift's layer2 pass on the engine's texture).
 #include "PreviewController.hpp"
+#ifdef Q_OS_WIN
+#include "PostDevGpu.hpp"
+#endif
 #include "FrameImage.hpp"
 #include "PostDevSurfaces.hpp"
 #include <QJsonObject>
@@ -105,14 +108,21 @@ bool PreviewController::editPostDev(const postdev::Params& next,const QString& e
 
 void PreviewController::refreshPostDevSurfaces() {
     // canvasGrade: none on a pair whose picture is graded frame by frame already.
-    const auto grade=frame_&&!navigator_.isNull()?postdev::gradeFor(canvasGrade(),navigator_.colorSpace()):std::nullopt;
+    const auto grade=frame_&&!navigator_.isNull()?postdev::gradeFor(canvasGrade(),navigator_.colorSpace(),full_image_,prepared_guide_):std::nullopt;
     const bool had=!graded_histogram_.empty();
     if(grade) {
         try {
+#ifdef Q_OS_WIN
+            const auto m=postdev::shownSourceMap(frame_,geometry_);
+            const int stride=std::max(1,int(std::sqrt(double(navigator_.width())*navigator_.height()/desktop::display::kHistogramSamples)));
+            graded_histogram_=postdev::gpuGradedHistogram(navigator_,*grade,
+                {float(m.a),float(m.b),float(m.c),float(m.d),float(m.e),float(m.f)},stride);
+#else
             QImage graded=navigator_;
             postdev::gradeImage(graded,*grade,
                                 postdev::shownSourceMap(frame_,geometry_));
             graded_histogram_=desktop::display::histogram(graded);
+#endif
         } catch(const std::exception&) {graded_histogram_.clear();}
     } else graded_histogram_.clear();
     if(grade||had)emit histogramChanged();
@@ -122,7 +132,7 @@ void PreviewController::refreshPostDevSurfaces() {
 
 QImage PreviewController::gradedThumbnail(QImage thumbnail) const {
     if(thumbnail.isNull()||!frame_)return thumbnail;
-    const auto grade=postdev::gradeFor(canvasGrade(),thumbnail.colorSpace());
+    const auto grade=postdev::gradeFor(canvasGrade(),thumbnail.colorSpace(),full_image_,prepared_guide_);
     if(!grade)return thumbnail;
     try {
         // A thumbnail of the cropped frame: each pixel at its source position.

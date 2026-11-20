@@ -88,7 +88,7 @@ Item {
                     ]
                     FrameCanvas {
                         anchors.fill: parent
-                        image: preview.previewImage
+                        image: preview.canvasPreviewImage
                         follow: overlay.canvas
                         enabled: false
                     }

@@ -311,18 +311,21 @@ ShellWindow {
             Page {
                 SettingsGroup {
                     title: L10n.tr("settings.rendering.preview")
-                    // The live tier's long edge (main.cpp reads it at start).
                     ParamRow {
                         label: L10n.tr("settings.rendering.previewResolution")
                         PillDropdown {
                             objectName: "previewResolution"
-                            readonly property var edges: [1080, 1920, 2560, 3840]
-                            model: ["1080", "1920", L10n.tr("settings.rendering.previewDefault", ["2560"]), "3840"]
-                            currentIndex: {
-                                AppSettings.revision
-                                var i = edges.indexOf(Number(AppSettings.value("rendering.previewLongEdge", 2560)))
-                                return i < 0 ? 2 : i
+                            readonly property var edges: {
+                                var sizes = [800, 1080, 1280, 1920, 2560, 3840]
+                                var saved = AppSettings.previewLongEdge
+                                if (sizes.indexOf(saved) < 0) {
+                                    sizes.push(saved)
+                                    sizes.sort(function(a, b) { return a - b })
+                                }
+                                return sizes
                             }
+                            model: edges.map(function(size) { return size + " px" })
+                            currentIndex: edges.indexOf(AppSettings.previewLongEdge)
                             onActivated: function(index) { AppSettings.setValue("rendering.previewLongEdge", edges[index]) }
                         }
                     }
