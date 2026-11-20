@@ -23,7 +23,7 @@ ColumnLayout {
         Text {
             text: group.title
             color: Theme.dim
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Font.Bold
+            font: Theme.forText(Theme.strongCaptionFont, text)
         }
         Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Theme.rule }
     }

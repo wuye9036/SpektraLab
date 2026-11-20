@@ -277,12 +277,22 @@ void controller(const std::filesystem::path& resources, const QString& scratch) 
         check(picked(c) == (QList<int>{0, 2}), "the open photo cannot leave the set");
         c.clickPhoto(0, true);
         check(picked(c) == QList<int>{2}, "Ctrl+click takes a photo out again");
+        c.clickPhoto(0, false, true);
+        check(c.activeIndex() == 2 && picked(c) == (QList<int>{0, 1, 2}), "Shift+click selects back to the open photo");
+        c.clickPhoto(1, false, true);
+        check(picked(c) == (QList<int>{1, 2}), "a shorter Shift range replaces the previous range");
         c.stepPhoto(-1);
         idle(c, "step left");
         check(c.activeIndex() == 1 && picked(c) == QList<int>{1}, "Left steps as a plain click on the neighbour");
         c.stepPhoto(-5);
         idle(c, "step past the start");
         check(c.activeIndex() == 0, "stepping stops at the ends");
+        c.clickPhoto(2, true);
+        c.clickPhoto(1, true, true);
+        check(c.activeIndex() == 0 && picked(c) == (QList<int>{0, 1, 2}), "Ctrl+Shift adds the forward range");
+        c.clickPhoto(0, false);
+        c.selectAllPhotos(true);
+        check(c.activeIndex() == 0 && picked(c) == (QList<int>{0, 1, 2}), "Select All keeps the open photo");
 
         // setParameters: ONE undo step for several rows; a bad value refuses
         // the whole edit.

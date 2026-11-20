@@ -267,8 +267,9 @@ hundreds is listed in one go: the saved edits of its new files are read in
 parallel and the strip is told once (measured: 300 photos listed in 0.26 s,
 every preview in 3 s; a 403-file folder's snapshot 54 s before, 5.7 s after;
 `spk_qt_library_workflow_test`'s large-folder block pins it). A plain click
-opens a photo and selects it alone; Ctrl+click adds or removes a photo without
-moving the open one, which cannot leave the selection; Left / Right step (not
+opens a photo and selects it alone. Ctrl+click toggles another photo. Shift+click
+selects the range from the open photo, Ctrl+Shift+click adds that range, and
+Ctrl+A selects every photo. Left / Right step (not
 while a text field has the keyboard, AGENTS.md trap 32). Dragging a thumbnail
 along the strip moves it, and the order is kept for its folder (beside the
 edits, `Order/<folder>-<hash>.order.json`) and laid over the listing next time,

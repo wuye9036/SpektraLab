@@ -98,9 +98,7 @@ Item {
                 elide: Text.ElideRight
                 color: row.header ? Theme.dim : row.selected ? Theme.selectionInk : Theme.secondaryText
                 opacity: row.header || row.usable ? 1 : Theme.disabledOpacity
-                font.family: Theme.fontFamily
-                font.pixelSize: row.header ? Theme.fontLabel : Theme.fontSmall
-                font.weight: Theme.weightText
+                font: Theme.forText(row.header ? Theme.labelFont : Theme.valueFont, text)
             }
             CinePill {
                 visible: row.modelData.cine === true

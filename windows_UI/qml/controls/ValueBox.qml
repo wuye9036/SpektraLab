@@ -69,7 +69,7 @@ Item {
         color: Theme.text
         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+        font: Theme.forText(Theme.valueFont, text)
     }
     // While typing, a press anywhere else in the window commits, as a Windows
     // field does: a click on a rail row or the canvas takes no focus in Qt
@@ -102,7 +102,7 @@ Item {
             horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
             clip: true
             selectByMouse: true
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+            font: Theme.forText(Theme.valueFont, text)
             Keys.onReturnPressed: box.endTyping(isFinite(box.parseText(text)))
             Keys.onEnterPressed: box.endTyping(isFinite(box.parseText(text)))
             Keys.onEscapePressed: box.endTyping(false)

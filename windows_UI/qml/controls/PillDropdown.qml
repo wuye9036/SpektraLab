@@ -29,9 +29,7 @@ ComboBox {
     width: parent && fill ? parent.width : implicitWidth
     x: parent && !fill ? parent.width - width : 0
     y: parent ? (parent.height - height) / 2 : 0
-    font.family: Theme.fontFamily
-    font.pixelSize: Theme.fontSmall
-    font.weight: Theme.weightText
+    font: Theme.forText(Theme.valueFont, displayText)
     hoverEnabled: true
     leftPadding: 10; rightPadding: 22
     topPadding: 0; bottomPadding: 0
@@ -45,7 +43,7 @@ ComboBox {
     }
     contentItem: Text {
         text: pill.displayText
-        font: pill.font
+        font: Theme.forText(Theme.valueFont, text)
         color: Theme.text
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
@@ -70,7 +68,7 @@ ComboBox {
         text: pill.textAt(index)
         contentItem: Text {
             text: entry.text
-            font: pill.font
+            font: Theme.forText(Theme.valueFont, text)
             color: Theme.text
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight

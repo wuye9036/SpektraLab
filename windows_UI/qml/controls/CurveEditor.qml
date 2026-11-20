@@ -54,7 +54,7 @@ ColumnLayout {
                     y: 1
                     text: editor.title(parent.modelData)
                     color: parent.on ? Theme.accent : Theme.secondaryText
-                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                    font: Theme.forText(Theme.valueFont, text)
                 }
                 Rectangle {
                     anchors.bottom: parent.bottom
@@ -218,12 +218,12 @@ ColumnLayout {
         Text {
             text: L10n.tr("postDev.curve.input", [parent.input])
             color: Theme.secondaryText
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+            font: Theme.forText(Theme.valueFont, text)
         }
         Text {
             text: L10n.tr("postDev.curve.output", [parent.output])
             color: Theme.secondaryText
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+            font: Theme.forText(Theme.valueFont, text)
         }
         Item { Layout.fillWidth: true }
     }

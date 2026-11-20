@@ -58,7 +58,7 @@ Item {
                     text: side.modelData
                     color: side.chosen ? Theme.selectionInk : Theme.secondaryText
                     opacity: side.usable ? 1 : Theme.disabledOpacity
-                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+                    font: Theme.forText(Theme.labelFont, text)
                 }
                 Rectangle {
                     visible: control.optionMarked.length > side.index && control.optionMarked[side.index] === true

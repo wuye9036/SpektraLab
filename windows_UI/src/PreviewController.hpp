@@ -427,8 +427,9 @@ public:
     // A left click on a thumbnail (Session.click, :1409-1444): a plain click
     // picks exactly this photograph and opens it; with Ctrl it joins or
     // leaves the picked set and the canvas stays where it is -- the open
-    // photograph cannot leave the set. No-ops during a batch export.
-    Q_INVOKABLE void clickPhoto(int index, bool command);
+    // photograph cannot leave the set. Shift selects a range from the open
+    // photograph, and Ctrl+Shift adds that range to the current selection.
+    Q_INVOKABLE void clickPhoto(int index, bool command, bool shift = false);
     // The chevrons and Left/Right (Session.selectRelative): a plain click on
     // the neighbour, clamped at the ends.
     Q_INVOKABLE void stepPhoto(int delta);

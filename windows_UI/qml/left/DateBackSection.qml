@@ -93,7 +93,7 @@ MacSection {
             elide: Text.ElideRight
             text: section.date.printed && section.date.printed.length > 0 ? section.date.printed : "—"
             color: Theme.text
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+            font: Theme.forText(Theme.valueFont, text)
         }
         PillDropdown {
             visible: !section.dataFace && !section.typed
@@ -113,7 +113,7 @@ MacSection {
             visible: !section.typed
             text: section.date.hasExifDate ? L10n.tr("dateBack.fromExif") : L10n.tr("dateBack.noExif")
             color: Theme.dim
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+            font: Theme.forText(Theme.captionFont, text)
         }
     }
     // Where the text comes from: the shooting date, or a line you type.
@@ -151,7 +151,7 @@ MacSection {
                 clip: true
                 color: Theme.text
                 selectionColor: Theme.accent
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                font: Theme.forText(Theme.valueFont, text)
                 maximumLength: 32
                 validator: RegularExpressionValidator { regularExpression: /[\x20-\x7e]{0,32}/ }
                 text: section.p.date_back_custom_text === undefined ? "" : section.p.date_back_custom_text
@@ -240,7 +240,7 @@ MacSection {
             anchors.verticalCenter: pad.verticalCenter
             text: L10n.tr("dateBack.cornerNote")
             color: Theme.dim
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+            font: Theme.forText(Theme.captionFont, text)
         }
     }
     ScrubSlider {

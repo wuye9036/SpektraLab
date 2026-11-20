@@ -14,6 +14,6 @@ Rectangle {
         anchors.centerIn: parent
         text: "CINE"
         color: parent.inverted ? Theme.selectionInk : Theme.accent
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontCine; font.weight: Theme.weightTitle
+        font: Theme.forText(Theme.badgeFont, text)
     }
 }

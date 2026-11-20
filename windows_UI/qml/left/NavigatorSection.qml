@@ -57,7 +57,7 @@ MacSection {
                 visible: !preview.hasFrame
                 text: L10n.tr("navigator.empty")
                 color: Theme.dim
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                font: Theme.forText(Theme.valueFont, text)
             }
             MouseArea {
                 anchors.fill: parent
@@ -90,7 +90,7 @@ MacSection {
             anchors.verticalCenter: parent.verticalCenter
             text: preview.hasFrame ? section.editor.scalePercent.toFixed(1) + " %" : ""
             color: Theme.dim
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+            font: Theme.forText(Theme.captionFont, text)
         }
     }
 }

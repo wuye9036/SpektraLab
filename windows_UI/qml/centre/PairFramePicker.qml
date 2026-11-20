@@ -37,7 +37,7 @@ Popup {
             placeholderText: L10n.tr("pair.filter")
             color: Theme.text
             placeholderTextColor: Theme.dim
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel
+            font: Theme.forText(Theme.labelFont, text || placeholderText)
             background: Rectangle { radius: 6; color: Theme.well }
         }
         GridView {
@@ -71,9 +71,10 @@ Popup {
                     width: 96
                     horizontalAlignment: Text.AlignHCenter
                     text: cell.modelData.used ? L10n.tr("pair.inThisPair") : cell.modelData.name
+                    textFormat: Text.PlainText
                     elide: Text.ElideMiddle
                     color: Theme.dim
-                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                    font: Theme.forText(cell.modelData.used ? Theme.captionFont : Theme.filenameFont, text)
                 }
                 MouseArea {
                     id: cellMouse
@@ -93,7 +94,7 @@ Popup {
             text: L10n.tr("pair.noCandidates")
             color: Theme.dim
             wrapMode: Text.WordWrap
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta
+            font: Theme.forText(Theme.captionFont, text)
         }
     }
 }

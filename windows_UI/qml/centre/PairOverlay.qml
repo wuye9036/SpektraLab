@@ -139,7 +139,7 @@ Item {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: L10n.tr("pair.addFrameShort")
                         color: Theme.secondaryText
-                        font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+                        font: Theme.forText(Theme.labelFont, text)
                     }
                 }
                 MouseArea {
@@ -206,7 +206,7 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 text: L10n.tr("pair.cropHint")
                 color: Theme.text
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+                font: Theme.forText(Theme.labelFont, text)
             }
             PillButton {
                 anchors.verticalCenter: parent.verticalCenter

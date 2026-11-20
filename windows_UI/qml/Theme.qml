@@ -1,5 +1,6 @@
 pragma Singleton
 import QtQuick
+import SpektraLab.Native 1.0
 
 // Every visual token of the editor, ported from the macOS app's
 // modern_UI/Spektrafilm/Spektrafilm/Theme/Theme.swift (the "v3/v4" drawing).
@@ -75,9 +76,10 @@ QtObject {
     // Follow the resolved language so the system setting and live switches
     // use the same face as an explicit Chinese selection.
     readonly property bool simplifiedChinese: L10n.activeLanguage === "zh-Hans"
-    readonly property Text yaheiProbe: Text { font.family: "Microsoft YaHei UI"; text: "Aa" }
-    readonly property string fontFamily: !simplifiedChinese ? "Segoe UI"
-        : yaheiProbe.fontInfo.family === "Microsoft YaHei UI" ? "Microsoft YaHei UI" : "Noto Sans SC"
+    readonly property Text japaneseProbe: Text { font.family: "Yu Gothic UI"; text: "日本語" }
+    readonly property bool japanese: L10n.activeLanguage === "ja"
+    readonly property string uiFamily: japanese && japaneseProbe.fontInfo.family === "Yu Gothic UI" ? "Yu Gothic UI"
+        : simplifiedChinese || japanese ? "Noto Sans SC" : "Segoe UI"
     // System icon fonts, never bundled: Segoe Fluent Icons (Windows 11), else
     // Segoe MDL2 Assets (Windows 10), whose code points the glyphs in
     // Icons.qml share. Asked of the font matcher for the one family rather
@@ -87,21 +89,30 @@ QtObject {
     readonly property Text iconProbe: Text { font.family: "Segoe Fluent Icons"; text: "\uE90C" }
     readonly property string iconFamily: iconProbe.fontInfo.family === "Segoe Fluent Icons"
         ? "Segoe Fluent Icons" : "Segoe MDL2 Assets"
-    readonly property int fontRail: 14       // a rail's own name
-    readonly property int fontTitle: 13      // a section title
-    readonly property int fontLabel: 12      // a control's label (Mac `body`)
-    readonly property int fontSmall: 11      // values, stock rows, pills (Mac `small`)
-    readonly property int fontMeta: 10       // sub-labels, captions (Mac `meta`)
-    readonly property int fontAction: 14     // Process / Original
-    readonly property int fontCine: 7        // the CINE badge
-    // The Mac sets every role in SF Pro Bold and lets ink carry the
-    // hierarchy. Segoe UI Bold is heavier than SF Pro Bold at these sizes, so
-    // titles take Bold and everything else Semibold, which reads at the same
-    // weight beside a Mac capture.
-    readonly property int weightTitle: Font.Bold
-    // YaHei UI has Regular and Bold, and Qt maps DemiBold to Bold. Keep
-    // small labels in Regular so the strokes stay distinct beside a title.
-    readonly property int weightText: simplifiedChinese ? Font.Normal : Font.DemiBold
+    // Bind the whole font at the call site, so controls, their delegates and
+    // secondary windows all resolve a role the same way on a language switch.
+    readonly property int textWeight: uiFamily === "Segoe UI" ? Font.DemiBold : Font.Normal
+    function face(size, weight, family, underline = false) {
+        return Qt.font({family: family || uiFamily, pixelSize: size, weight: weight, underline: underline})
+    }
+    function forText(role, text) {
+        return UiFonts.forText(role, text)
+    }
+    readonly property font headingFont: face(14, Font.Bold)
+    readonly property font sectionFont: face(13, Font.Bold)
+    readonly property font labelFont: face(12, textWeight)
+    readonly property font valueFont: face(11, textWeight)
+    readonly property font captionFont: face(10, textWeight)
+    readonly property font strongCaptionFont: face(captionFont.pixelSize, Font.Bold)
+    readonly property font underlinedCaptionFont: face(captionFont.pixelSize, captionFont.weight, captionFont.family, true)
+
+    // Imported names can contain Latin and Han in any interface language.
+    // Use a face covering both scripts for the entire name, including its extension.
+    readonly property font filenameFont: labelFont
+    readonly property font badgeFont: face(7, Font.Bold)
+    readonly property font aboutTitleFont: face(22, Font.Bold)
+    readonly property font wordmarkFont: Qt.font({family: uiFamily, pixelSize: 30, weight: Font.Light, letterSpacing: 1})
+    readonly property font licenceFont: face(valueFont.pixelSize, Font.Normal, "Consolas")
 
     // --- metrics (Theme.swift Metric, in logical px) ---
     // The rail headers and the tool bar share one 38 px top row.
@@ -167,7 +178,7 @@ QtObject {
     readonly property int zoomPillWidth: 46
     readonly property int zoomPillHeight: 21
     // Filmstrip.
-    readonly property int filmstripHeight: 132
+    readonly property int filmstripHeight: 136
     readonly property int thumbHeight: 104
     readonly property int stripSpacing: 14
     // Rails: the standard width is a little wider than the Mac's 254 / 288,

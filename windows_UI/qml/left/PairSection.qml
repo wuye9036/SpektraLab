@@ -98,7 +98,7 @@ MacSection {
                 Text {
                     text: row.index === 0 ? L10n.tr("pair.film") : section.holeTitle(row.index - 1)
                     color: Theme.text
-                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+                    font: Theme.forText(Theme.labelFont, text)
                 }
                 Text {
                     width: parent.width
@@ -106,7 +106,7 @@ MacSection {
                                           : section.holeSubtitle(row.h)
                     elide: Text.ElideMiddle
                     color: row.h && row.h.filled && !row.h.exists ? Theme.warning : Theme.dim
-                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                    font: Theme.forText(Theme.captionFont, text)
                 }
             }
             MouseArea {
@@ -164,7 +164,7 @@ MacSection {
         Layout.fillWidth: true
         text: L10n.tr("pair.cropUnderHole")
         color: Theme.dim
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+        font: Theme.forText(Theme.captionFont, text)
     }
     RowLayout {
         visible: !!(section.hole && section.hole.filled)

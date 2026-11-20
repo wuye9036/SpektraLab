@@ -153,7 +153,7 @@ MacSection {
                 visible: section.meter.available === true && section.method !== "custom"
                 text: visible ? L10n.tr("camera.meteredLabel", [section.signedFixed(section.meter.exposureEv, 1)]) : ""
                 color: Theme.dim
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                font: Theme.forText(Theme.captionFont, text)
                 HoverHandler { id: meterHover }
                 ToolTip.visible: meterHover.hovered
                 ToolTip.text: L10n.tr("camera.meteredHelp", [section.methodTitle(section.method)])

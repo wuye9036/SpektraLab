@@ -195,7 +195,8 @@ try {
                                 'resources/vulkan/spk_affine3.spv', 'resources/spektrafilm_constants.bin',
                                 'resources/profiles/kodak_portra_400.json',
                                 'resources/profiles/kodak_tri_x_400.json', 'resources/fonts/texgyreheros-regular.otf',
-                                'resources/io/sRGB.icc', 'licenses/LICENSE', 'licenses/SPEKTRAFILM_LICENSE.txt',
+                                'resources/io/sRGB.icc', 'resources/ui-fonts/NotoSansSC-VF.ttf', 'resources/ui-fonts/OFL.txt',
+                                'licenses/LICENSE', 'licenses/SPEKTRAFILM_LICENSE.txt',
                                 'licenses/THIRD_PARTY.md', 'licenses/LibRaw-LICENSE.LGPL', 'licenses/Qt-SBOM')) {
             if (-not (Test-Path -LiteralPath (Join-Path $stage $required))) { throw "Package is missing $required" }
         }

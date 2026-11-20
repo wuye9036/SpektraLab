@@ -117,7 +117,7 @@ Item {
         y: Math.max(cropOverlay.imageBox.y, cropOverlay.selectionBox.y) + 8
         text: L10n.tr("crop.straightenPending", [((gesture.mode === "straighten" && gesture.pendingAngle !== undefined) ? gesture.pendingAngle : cropOverlay.editor.draftStraighten).toFixed(1)])
         color: Theme.text
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightTitle
+        font: Theme.forText(Theme.strongCaptionFont, text)
         style: Text.Raised; styleColor: "#99000000"
     }
     // While a film edge holds the crop at its gate, editor.cropLockRatio is

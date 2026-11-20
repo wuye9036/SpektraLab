@@ -38,7 +38,7 @@ ShellWindow {
             text: viewer.heading
             elide: Text.ElideRight
             color: Theme.text
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontTitle; font.weight: Theme.weightTitle
+            font: Theme.forText(Theme.sectionFont, text)
         }
         ScrollView {
             id: scroll
@@ -55,7 +55,7 @@ ShellWindow {
                 color: Theme.secondaryText
                 selectionColor: Theme.accent
                 selectedTextColor: Theme.selectionInk
-                font.family: "Consolas"; font.pixelSize: 11
+                font: Theme.forText(Theme.licenceFont, text)
                 padding: 10
                 background: null
             }

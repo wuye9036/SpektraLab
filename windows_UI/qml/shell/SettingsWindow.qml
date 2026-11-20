@@ -72,7 +72,7 @@ ShellWindow {
             anchors.verticalCenter: parent.verticalCenter
             text: absent.value
             color: Theme.text
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+            font: Theme.forText(Theme.valueFont, text)
         }
     }
     // A page: the groups in a column that scrolls when the window is short.
@@ -121,7 +121,7 @@ ShellWindow {
                             anchors.horizontalCenter: parent.horizontalCenter
                             text: tab.modelData.title
                             color: tab.chosen ? Theme.text : Theme.dim
-                            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                            font: Theme.forText(Theme.captionFont, text)
                         }
                     }
                     MouseArea {
@@ -256,7 +256,7 @@ ShellWindow {
                             text: DisplayColour.customProfilePath.length > 0 ? AppInfo.nativePath(DisplayColour.customProfilePath) : L10n.tr("settings.display.noProfile")
                             elide: Text.ElideMiddle
                             color: DisplayColour.customProfilePath.length > 0 ? Theme.text : Theme.dim
-                            font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                            font: Theme.forText(Theme.valueFont, text)
                             HoverHandler { id: pathHover }
                             ToolTip.visible: pathHover.hovered && DisplayColour.customProfilePath.length > 0
                             ToolTip.text: AppInfo.nativePath(DisplayColour.customProfilePath)

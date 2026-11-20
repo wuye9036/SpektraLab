@@ -73,6 +73,8 @@ MacSection {
         implicitHeight: plotH + bandGap + bandH + axisH
         opacity: section.lat.current === false ? 0.55 : 1
         readonly property var reading: section.lat
+        readonly property font axisFont: Theme.captionFont
+        onAxisFontChanged: requestPaint()
         onReadingChanged: requestPaint()
         onWidthChanged: requestPaint()
         onVisibleChanged: if (visible) requestPaint()
@@ -110,8 +112,7 @@ MacSection {
             var w = width, plotH = plot.plotH
             var lo = r.axisFrom === undefined ? -8 : r.axisFrom, hi = r.axisTo === undefined ? 8 : r.axisTo
             function x(ev) { return (ev - lo) / (hi - lo) * w }
-            var font = "600 " + Theme.fontMeta + "px \"" + Theme.fontFamily + "\""
-            ctx.font = font
+            ctx.font = axisFont.weight + " " + axisFont.pixelSize + "px \"" + axisFont.family + "\""
             ctx.textBaseline = "top"
 
             // The ground and the 2-stop grid; mid-grey brighter.
@@ -242,14 +243,14 @@ MacSection {
                 Text {
                     text: modelData[0]
                     color: Theme.dim
-                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                    font: Theme.forText(Theme.captionFont, text)
                 }
                 Text {
                     objectName: "latitude_" + modelData[1]
                     readonly property real share: Number(section.lat[modelData[1]] || 0)
                     text: (share * 100).toFixed(1) + " %"
                     color: modelData[2] && share >= 0.005 ? Theme.accent : Theme.text
-                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightTitle
+                    font: Theme.forText(Theme.strongCaptionFont, text)
                 }
                 Item { Layout.fillWidth: index < 2; implicitWidth: 0 }
             }
@@ -264,7 +265,7 @@ MacSection {
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.WordWrap
         color: Theme.dim
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+        font: Theme.forText(Theme.captionFont, text)
     }
     // Nothing measured: why, in the engine's words when it refused.
     Text {
@@ -277,6 +278,6 @@ MacSection {
         verticalAlignment: Text.AlignVCenter
         wrapMode: Text.WordWrap
         color: Theme.dim
-        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+        font: Theme.forText(Theme.captionFont, text)
     }
 }

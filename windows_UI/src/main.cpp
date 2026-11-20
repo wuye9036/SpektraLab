@@ -12,6 +12,7 @@
 #include "FrameCanvas.hpp"
 #include "FrameImage.hpp"
 #include "Localizer.hpp"
+#include "UiFonts.hpp"
 #include "Messages.hpp"
 #include <QCommandLineParser>
 #include <QSGRendererInterface>
@@ -1070,7 +1071,7 @@ QString earlyOption(int argc,char** argv,const char* name) {
 int main(int argc,char** argv) {
     // The Windows offscreen plugin uses a file font database instead of the
     // native DirectWrite one. Reuse installed system fonts for the explicit
-    // test platform; no fonts are copied or bundled with the application.
+    // test platform alongside the bundled fallback.
     if(qEnvironmentVariable("QT_QPA_PLATFORM")=="offscreen"&&qEnvironmentVariableIsEmpty("QT_QPA_FONTDIR"))
         qputenv("QT_QPA_FONTDIR",(qEnvironmentVariable("WINDIR")+"/Fonts").toUtf8());
     // Preserve Qt diagnostics when launched by a validation runner with
@@ -1096,6 +1097,8 @@ int main(int argc,char** argv) {
     if(!startup.interfaceScaleFromEnvironment&&startup.activeInterfaceScale!=QLatin1String("115"))
         qputenv("QT_SCALE_FACTOR",QByteArray::number(AppInfo::scaleFactor(startup.activeInterfaceScale),'f',4));
     QGuiApplication app(argc,argv);
+    UiFonts uiFonts;
+    qmlRegisterSingletonInstance("SpektraLab.Native",1,0,"UiFonts",&uiFonts);
     QQuickStyle::setStyle("Basic");
     QCommandLineParser parser;parser.setApplicationDescription("SpektraLab Windows Qt Quick preview");parser.addHelpOption();
     parser.addOptions({{"resources","Engine resource directory","directory"},

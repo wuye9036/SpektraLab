@@ -7,9 +7,7 @@ import QtQuick.Layouts
 Text {
     Layout.fillWidth: true
     color: Theme.dim
-    font.family: Theme.fontFamily
-    font.pixelSize: Theme.fontMeta
-    font.weight: Theme.weightText
+    font: Theme.forText(Theme.captionFont, text)
     wrapMode: Text.WordWrap
     lineHeight: 1.2
 }

@@ -11,6 +11,10 @@ not use a Qt commercial licence.
 
 ## Shipped in the application folder
 
+The Windows UI ships the unmodified [Noto Sans SC variable font](https://github.com/google/fonts/tree/2894aab31764f10f29c421bdfd2340d3b382d384/ofl/notosanssc)
+under the SIL Open Font License 1.1. The font and its copyright and licence text ship together in
+`resources/ui-fonts/`. The font's SHA-256 is `a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da`.
+
 | Component | What and where | Licence | Notice in this folder |
 |---|---|---|---|
 | SpektraLab | `SpektraLabQt.exe`, the engine compiled into it, `resources/vulkan/*.spv` | GPL-3.0-or-later | `LICENSE` |

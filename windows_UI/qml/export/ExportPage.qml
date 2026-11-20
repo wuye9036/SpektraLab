@@ -195,7 +195,7 @@ Popup {
                         anchors.verticalCenter: parent.verticalCenter
                         text: L10n.tr("export.title")
                         color: Theme.text
-                        font.family: Theme.fontFamily; font.pixelSize: Theme.fontRail; font.weight: Theme.weightTitle
+                        font: Theme.forText(Theme.headingFont, text)
                     }
                 }
                 Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Theme.ruleRegion }
@@ -247,7 +247,7 @@ Popup {
                                             text: modelData.name
                                             elide: Text.ElideRight
                                             color: index === exportRecipes.selectedIndex ? Theme.selectionInk : Theme.secondaryText
-                                            font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                                            font: Theme.forText(Theme.valueFont, text)
                                         }
                                         HoverHandler { id: rowHover }
                                         TapHandler { onTapped: exportRecipes.select(index); onDoubleTapped: renameDialog.open() }
@@ -342,7 +342,7 @@ Popup {
                                     Layout.preferredWidth: page.labelColumn; Layout.alignment: Qt.AlignTop; Layout.topMargin: 1
                                     text: L10n.tr("export.naming.format")
                                     color: Theme.secondaryText
-                                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+                                    font: Theme.forText(Theme.labelFont, text)
                                 }
                                 Flow {
                                     Layout.fillWidth: true
@@ -370,7 +370,7 @@ Popup {
                                     Layout.preferredWidth: page.labelColumn; Layout.alignment: Qt.AlignTop
                                     text: L10n.tr("export.naming.fileName")
                                     color: Theme.secondaryText
-                                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+                                    font: Theme.forText(Theme.labelFont, text)
                                 }
                                 TextEdit {
                                     objectName: "exportSampleName"
@@ -379,7 +379,7 @@ Popup {
                                     wrapMode: TextEdit.WrapAnywhere
                                     text: page.sampleName
                                     color: Theme.text
-                                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                                    font: Theme.forText(Theme.valueFont, text)
                                 }
                             }
                         }
@@ -546,7 +546,7 @@ Popup {
                                  : L10n.tr(page.worklist.length === 1 ? "export.oneImage" : "export.images", [page.worklist.length])
                             color: Theme.dim
                             elide: Text.ElideRight
-                            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                            font: Theme.forText(Theme.captionFont, text)
                         }
                         ActionButton {
                             visible: page.running
@@ -582,7 +582,7 @@ Popup {
                     Text {
                         text: L10n.tr(page.worklist.length === 1 ? "export.oneImage" : "export.images", [page.worklist.length])
                         color: Theme.text
-                        font.family: Theme.fontFamily; font.pixelSize: Theme.fontSmall; font.weight: Theme.weightText
+                        font: Theme.forText(Theme.valueFont, text)
                     }
                     ActionButton {
                         objectName: "exportCloseButton"
@@ -608,7 +608,7 @@ Popup {
                 visible: !preview.hasFrame
                 text: L10n.tr("export.nothingOpen")
                 color: Theme.dim
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+                font: Theme.forText(Theme.labelFont, text)
             }
             Rectangle {
                 anchors.bottom: parent.bottom; anchors.bottomMargin: 14
@@ -623,7 +623,7 @@ Popup {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: L10n.tr("export.proof.caption", [preview.exportProofInfo.space !== undefined ? preview.exportProofInfo.space : ""])
                         color: Theme.secondaryText
-                        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                        font: Theme.forText(Theme.captionFont, text)
                     }
                     Text {
                         anchors.horizontalCenter: parent.horizontalCenter
@@ -632,14 +632,14 @@ Popup {
                         text: L10n.tr("export.proof.clipped", [clipped >= 0.01 ? Math.round(clipped * 100) + " %" : (clipped * 100).toFixed(1) + " %",
                                                                preview.exportProofInfo.space !== undefined ? preview.exportProofInfo.space : ""])
                         color: Theme.accent
-                        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                        font: Theme.forText(Theme.captionFont, text)
                     }
                     Text {
                         anchors.horizontalCenter: parent.horizontalCenter
                         visible: preview.exportProofInfo.digitalIntermediate === true
                         text: L10n.tr("export.proof.di")
                         color: Theme.dim
-                        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                        font: Theme.forText(Theme.captionFont, text)
                     }
                 }
             }
@@ -682,9 +682,10 @@ Popup {
                         y: 92; width: parent.width
                         horizontalAlignment: Text.AlignHCenter
                         text: cell.modelData.name
+                        textFormat: Text.PlainText
                         elide: Text.ElideMiddle
                         color: cell.modelData.error ? Theme.warning : Theme.text
-                        font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+                        font: Theme.forText(Theme.filenameFont, text)
                     }
                     // Read-only here: the page is modal, and the controller
                     // holds the open photo and the selection while any
@@ -696,7 +697,7 @@ Popup {
                     wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter
                     text: L10n.tr("export.worklistEmpty")
                     color: Theme.dim
-                    font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+                    font: Theme.forText(Theme.labelFont, text)
                 }
             }
         }

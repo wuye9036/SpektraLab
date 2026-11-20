@@ -155,9 +155,10 @@ Rectangle {
             Layout.fillWidth: true
             Layout.minimumWidth: 40
             text: preview.hasFrame ? preview.fileName + "  ·  " + preview.metadata.width + "×" + preview.metadata.height : preview.status
+            textFormat: Text.PlainText
             elide: Text.ElideRight
             color: Theme.dim
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+            font: Theme.forText(preview.hasFrame ? Theme.filenameFont : Theme.captionFont, text)
             HoverHandler { id: lineHover }
             ToolTip.visible: lineHover.hovered && photoLine.truncated
             ToolTip.text: text
@@ -184,7 +185,7 @@ Rectangle {
             text: frameSpace + (monitor.length > 0 ? " " + L10n.tr("toolbar.displayTarget", [monitor]) : "")
             elide: Text.ElideRight
             color: Theme.dim
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+            font: Theme.forText(Theme.captionFont, text)
             HoverHandler { id: colourHover }
             ToolTip.visible: colourHover.hovered
             ToolTip.text: L10n.tr("toolbar.displayHelp", [DisplayColour.displayName]) + (DisplayColour.status.length > 0 ? "\n" + DisplayColour.status : "")
@@ -210,7 +211,7 @@ Rectangle {
             visible: preview.hasFrame && preview.dirty
             text: L10n.tr("statusBar.updating")
             color: Theme.accent
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+            font: Theme.forText(Theme.captionFont, text)
         }
         // Before / after (BeforeAfterIcon.swift, traced from the drawing on
         // its 60.8 x 48.11 box into 25 x 16): the outlined frame, the divider,
@@ -260,7 +261,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: preview.hasFrame ? Math.round(bar.editor.scalePercent) + " %" : "—"
                 color: Theme.text
-                font.family: Theme.fontFamily; font.pixelSize: Theme.fontLabel; font.weight: Theme.weightText
+                font: Theme.forText(Theme.labelFont, text)
             }
             MouseArea {
                 id: zoomMouse

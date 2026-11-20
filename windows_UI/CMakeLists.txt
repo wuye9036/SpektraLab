@@ -88,7 +88,7 @@ qt_add_executable(SpektraLabQt WIN32
     src/CanvasTools.hpp src/CanvasTools.cpp
     src/ColorCanvasNode.hpp src/ColorCanvasNode.cpp
     src/ColorPipeline.hpp src/ColorPipeline.cpp
-    src/Localizer.hpp src/Localizer.cpp)
+    src/Localizer.hpp src/Localizer.cpp src/UiFonts.hpp src/UiFonts.cpp)
 target_compile_features(SpektraLabQt PRIVATE cxx_std_20)
 target_link_libraries(SpektraLabQt PRIVATE
     spk_desktop_host spk_qt_host_output Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Qml Qt6::Quick Qt6::QuickControls2)
@@ -134,6 +134,8 @@ set_target_properties(SpektraLabQt PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_
 # The one resource directory is explicitly adjacent to the executable. No
 # lookup through another checkout and no Python in the application.
 add_custom_target(spektralab_qt_resources ALL
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui-fonts" "$<TARGET_FILE_DIR:SpektraLabQt>/resources/ui-fonts"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
         "$<TARGET_FILE_DIR:spk_raw_render>/resources" "$<TARGET_FILE_DIR:SpektraLabQt>/resources"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory

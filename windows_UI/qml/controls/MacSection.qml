@@ -76,7 +76,7 @@ ColumnLayout {
             anchors.verticalCenter: parent.verticalCenter
             text: section.title
             color: Theme.text
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontTitle; font.weight: Theme.weightTitle
+            font: Theme.forText(Theme.sectionFont, text)
         }
         Row {
             id: trailing
@@ -119,7 +119,7 @@ ColumnLayout {
             horizontalAlignment: Text.AlignRight
             elide: Text.ElideRight
             color: Theme.dim
-            font.family: Theme.fontFamily; font.pixelSize: Theme.fontMeta; font.weight: Theme.weightText
+            font: Theme.forText(Theme.captionFont, text)
         }
     }
     RailMenu { id: sectionMenu }

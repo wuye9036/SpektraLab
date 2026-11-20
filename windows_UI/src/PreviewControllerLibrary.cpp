@@ -292,8 +292,18 @@ void PreviewController::applyFolderOrder(int from) {
     }
 }
 
-void PreviewController::clickPhoto(int index,bool command) {
+void PreviewController::clickPhoto(int index,bool command,bool shift) {
     if(!ready_||batchExporting()||dialog_open_||index<0||index>=int(library_.size()))return;
+    if(shift && active_index_ >= 0) {
+        const auto [first, last] = std::minmax(active_index_, index);
+        for(int i = 0; i < int(library_.size()); ++i) {
+            auto& item = library_[i];
+            const bool inRange = first <= i && i <= last;
+            item.selected = inRange || (command && item.selected);
+        }
+        emit libraryChanged();
+        return;
+    }
     if(command) {
         // Session.togglePick: one photograph in or out, the canvas unmoved;
         // the open one cannot leave the set (a batch without the frame it
