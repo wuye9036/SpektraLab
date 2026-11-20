@@ -76,7 +76,7 @@ QtObject {
     // Follow the resolved language so the system setting and live switches
     // use the same face as an explicit Chinese selection.
     readonly property bool simplifiedChinese: L10n.activeLanguage === "zh-Hans"
-    readonly property Text japaneseProbe: Text { font.family: "Yu Gothic UI"; text: "日本語" }
+    readonly property Text japaneseProbe: Text { font.family: "Yu Gothic UI"; text: Qt.locale("ja").nativeLanguageName }
     readonly property bool japanese: L10n.activeLanguage === "ja"
     readonly property string uiFamily: japanese && japaneseProbe.fontInfo.family === "Yu Gothic UI" ? "Yu Gothic UI"
         : simplifiedChinese || japanese ? "Noto Sans SC" : "Segoe UI"
