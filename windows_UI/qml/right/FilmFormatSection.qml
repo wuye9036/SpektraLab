@@ -80,7 +80,9 @@ MacSection {
         toolTip: L10n.tr("format.note")
         PillDropdown {
             id: longEdge
-            model: ["18 mm", "24 mm", L10n.tr("format.default35"), L10n.tr("format.size36"), "56 mm", "70 mm", "90 mm"]
+            model: [L10n.tr("format.size18"), L10n.tr("format.size24"), L10n.tr("format.default35"),
+                    L10n.tr("format.size36"), L10n.tr("format.size56"), L10n.tr("format.size70"),
+                    L10n.tr("format.size90")]
             readonly property var lengths: [18, 24, 35, 36, 56, 70, 90]
             readonly property real actualLength: Number(preview.adjustments.filmFormatMm === undefined ? 35 : preview.adjustments.filmFormatMm)
             // Reads `model` so a language switch (a new model, index reset to
