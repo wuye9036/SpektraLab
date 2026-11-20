@@ -633,6 +633,25 @@ void runProof(Harness& h,bool software,const QString& resources) {
     h.pipeline().setLutOverrideForTesting(std::make_shared<const ColorLut>());
 }
 void run(bool software,const QString& resources) {
+    // A stock edit publishes a downsampled preview, then the full frame.
+    // The short edge rounded to 801 pixels stands for 1602, not exactly 1601.
+    {
+        FrameCanvas canvas;
+        canvas.setSize({600, 400});
+        const QImage full(2400, 1601, QImage::Format_RGB32);
+        QImage preview(1200, 801, QImage::Format_RGB32);
+        preview.setDevicePixelRatio(0.5);
+        canvas.setImage(full);
+        canvas.zoomTo(2);
+        canvas.panBy(211, -137);
+        const auto origin = canvas.imageRect().topLeft();
+        canvas.setImage(preview);
+        check(!canvas.fit() && canvas.scalePercent() == 200 && canvas.imageRect().topLeft() == origin,
+              "stock preview must preserve zoom and pan with a rounded short edge");
+        canvas.setImage(full);
+        check(canvas.scalePercent() == 200 && canvas.imageRect().topLeft() == origin,
+              "full-resolution replacement must preserve zoom and pan");
+    }
     const char* mode=software?"software backend (CPU path)":"D3D11";
     const auto identity=std::make_shared<const ColorLut>();
     const auto swap=makeLut(17,101,[](const Rgb& c){return Rgb{c[1],c[2],c[0]};});

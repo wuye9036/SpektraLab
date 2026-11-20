@@ -69,15 +69,17 @@ void FrameCanvas::refreshGrade() {
 void FrameCanvas::setImage(const QImage& image) {
     if(image.cacheKey()==image_.cacheKey())return;
     const QSize before=logicalSize();
+    const bool switchingResolution = !image_.isNull() && !image.isNull()
+        && image_.devicePixelRatio() != image.devicePixelRatio();
     const bool changedSpace=image.colorSpace()!=image_.colorSpace();
     image_=image;++revision_;
     if(changedSpace)refreshGrade();
     sync();
-    // A new size is a new frame (or a new crop): keep the zoom, centred. The
-    // full frame replacing its live one is the same size here (logicalSize),
-    // so the view stays exactly where it was.
+    // Switching between live and full keeps the photo origin. Their logical
+    // extents can differ because the preview was rounded to whole pixels.
+    // sync() already clamps the existing pan to the bounds of the new image.
     const QSize after=logicalSize();
-    if(after!=before&&!view_.fit&&view_.dpr>0) {
+    if(!switchingResolution&&after!=before&&!view_.fit&&view_.dpr>0) {
         const double z=view_.zoom/view_.dpr;
         view_.offset=QPointF((width()-after.width()*z)*0.5,(height()-after.height()*z)*0.5);
         view_=canvas::clamped(view_);
