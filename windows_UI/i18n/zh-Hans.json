@@ -18,7 +18,7 @@
         "menu.bypassAdjustments": "暂时停用调整",
         "menu.restoreAdjustments": "恢复调整",
         "grid.title": "参考网格",
-        "grid.off": "关闭",
+        "grid.style": "参考网格样式",
         "grid.cross": "十字线",
         "grid.thirds": "三分线",
         "grid.dense": "密集网格（10 × 10）",

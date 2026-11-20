@@ -18,7 +18,7 @@
         "menu.bypassAdjustments": "Bypass Adjustments",
         "menu.restoreAdjustments": "Restore Adjustments",
         "grid.title": "Reference grid",
-        "grid.off": "Off",
+        "grid.style": "Reference grid style",
         "grid.cross": "Crosshair",
         "grid.thirds": "Rule of thirds",
         "grid.dense": "Dense grid (10 × 10)",

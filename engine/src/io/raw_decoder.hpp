@@ -81,6 +81,8 @@ struct RawMetadata {
     ShootingData shooting;
     EmbeddedLens lens_profile;
     double focal_mm = 0;
+    double iso = 0;
+    std::string lens_model;
     // Set by the two RAW policies (capture_source_metadata): the data is
     // sensor response. False for a flat file decoded at the door, which is
     // already somebody's rendering of a scene.

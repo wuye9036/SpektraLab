@@ -18,7 +18,7 @@
         "menu.bypassAdjustments": "Desactivar ajustes temporalmente",
         "menu.restoreAdjustments": "Reactivar ajustes",
         "grid.title": "Cuadrícula de referencia",
-        "grid.off": "Desactivada",
+        "grid.style": "Estilo de cuadrícula de referencia",
         "grid.cross": "Cruz central",
         "grid.thirds": "Regla de los tercios",
         "grid.dense": "Cuadrícula densa (10 × 10)",

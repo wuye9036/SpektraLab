@@ -18,7 +18,7 @@
         "menu.bypassAdjustments": "補正を一時無効化",
         "menu.restoreAdjustments": "補正を再度有効化",
         "grid.title": "参考グリッド",
-        "grid.off": "オフ",
+        "grid.style": "参考グリッドの種類",
         "grid.cross": "十字線",
         "grid.thirds": "三分割線",
         "grid.dense": "細かいグリッド（10 × 10）",

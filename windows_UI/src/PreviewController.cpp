@@ -645,6 +645,33 @@ bool PreviewController::filmIsPositive() const {
 }
 QString PreviewController::fileName() const {return frame_?QString::fromStdWString(frame_->source.filename().wstring()):QString();}
 QUrl PreviewController::sourceFolder() const {return frame_?QUrl::fromLocalFile(QString::fromStdWString(frame_->source.parent_path().wstring())):QUrl();}
+QString PreviewController::captureSummary() const {
+    const auto* photo = shotMetadata();
+    if (!photo) return {};
+    QStringList fields;
+    const auto model = text(photo->model).trimmed();
+    const auto make = text(photo->make).trimmed();
+    const auto camera = model.startsWith(make, Qt::CaseInsensitive) ? model : (make + " " + model).trimmed();
+    if (!camera.isEmpty()) fields << camera;
+    const auto aperture = photo->shooting.f_number;
+    if (std::isfinite(aperture) && aperture > 0)
+        fields << "f/" + QString::number(aperture, 'g', 3);
+    const auto seconds = photo->shooting.exposure_time;
+    if (std::isfinite(seconds) && seconds > 0) {
+        const auto reciprocal = 1.0 / seconds;
+        const auto denominator = std::round(reciprocal);
+        // Keep fractional long exposures (e.g. 0.8 s) at their recorded duration.
+        const bool fraction = seconds < 1 && std::abs(reciprocal - denominator) <= reciprocal * 0.001;
+        fields << (fraction ? "1/" + QString::number(denominator, 'f', 0)
+                            : QString::number(seconds, 'g', 3)) + " s";
+    }
+    if (std::isfinite(photo->iso) && photo->iso > 0)
+        fields << "ISO " + QString::number(photo->iso, 'f', 0);
+    const auto lens = text(photo->lens_model).trimmed();
+    if (!lens.isEmpty()) fields << lens;
+    return fields.join(QStringLiteral("  ·  "));
+}
+
 QVariantMap PreviewController::metadata() const {
     if(!frame_)return {};
     // The source is the whole decode the crop is drawn in, also while the

@@ -73,13 +73,6 @@ Item {
             MenuCommand { text: L10n.tr("menu.zoomIn"); shortcutText: "Ctrl++"; enabled: root.editor.canZoomIn; onTriggered: root.editor.zoomIn() }
             MenuCommand { text: L10n.tr("menu.zoomOut"); shortcutText: "Ctrl+-"; enabled: root.editor.canZoomOut; onTriggered: root.editor.zoomOut() }
             MenuSeparator {}
-            RailMenu {
-                title: L10n.tr("grid.title")
-                MenuCommand { text: L10n.tr("grid.off"); marked: root.editor.gridDivisions === 0; onTriggered: root.editor.gridDivisions = 0 }
-                MenuCommand { text: L10n.tr("grid.cross"); marked: root.editor.gridDivisions === 2; onTriggered: root.editor.gridDivisions = 2 }
-                MenuCommand { text: L10n.tr("grid.thirds"); marked: root.editor.gridDivisions === 3; onTriggered: root.editor.gridDivisions = 3 }
-                MenuCommand { text: L10n.tr("grid.dense"); marked: root.editor.gridDivisions === 10; onTriggered: root.editor.gridDivisions = 10 }
-            }
             MenuCommand { text: L10n.tr("menu.sidePanels"); shortcutText: "Ctrl+B"; onTriggered: root.editor.toggleSidePanels() }
             MenuCommand { text: L10n.tr("menu.filmstrip"); shortcutText: "Ctrl+Shift+F"; onTriggered: root.editor.filmstripCollapsed = !root.editor.filmstripCollapsed }
             MenuCommand { text: L10n.tr("menu.fullScreen"); shortcutText: "F11"; onTriggered: root.toggleFullScreen() }

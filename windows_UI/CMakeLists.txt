@@ -121,7 +121,7 @@ qt_add_qml_module(SpektraLabQt URI SpektraLab VERSION 1.0
         qml/left/LeftRail.qml qml/left/NavigatorSection.qml qml/left/ClipboardSection.qml
         qml/left/FilmSection.qml qml/left/PrintSection.qml qml/left/CropSection.qml
         qml/left/EnlargerSection.qml qml/left/FilmEdgeSection.qml qml/left/DateBackSection.qml
-        qml/centre/CentrePane.qml qml/centre/TopBar.qml qml/centre/CanvasView.qml
+        qml/centre/CentrePane.qml qml/centre/TopBar.qml qml/centre/GridButton.qml qml/centre/CanvasView.qml
         qml/centre/CropOverlay.qml qml/centre/Filmstrip.qml
         qml/right/RightRail.qml qml/right/LatitudeSection.qml qml/right/CameraSection.qml
         qml/right/FilmFormatSection.qml qml/right/ScenePlacementSection.qml

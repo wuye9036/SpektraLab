@@ -122,6 +122,8 @@ bool decode_flat(const std::filesystem::path& source, io::DecodedRaw& out, std::
     const auto& meta = probe.metadata;
     decoded.metadata.make = meta.make;
     decoded.metadata.model = meta.model;
+    decoded.metadata.lens_model = meta.lens;
+    decoded.metadata.iso = meta.iso.value_or(0);
     std::string kind = spkhost::kind_name(probe.kind);
     for (char& c : kind) c = char(std::toupper(static_cast<unsigned char>(c)));
     decoded.metadata.decoder_name = kind + ", " + space;

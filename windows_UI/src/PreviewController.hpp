@@ -75,6 +75,7 @@ class PreviewController final : public QObject {
     // 33 MP. Changes whenever previewImage does.
     Q_PROPERTY(QImage navigatorImage READ navigatorImage NOTIFY frameChanged)
     Q_PROPERTY(QVariantMap metadata READ metadata NOTIFY frameChanged)
+    Q_PROPERTY(QString captureSummary READ captureSummary NOTIFY pairChanged)
     Q_PROPERTY(QVariantList films READ films NOTIFY catalogChanged)
     Q_PROPERTY(QVariantList papers READ papers NOTIFY catalogChanged)
     Q_PROPERTY(int filmIndex READ filmIndex WRITE setFilmIndex NOTIFY settingsChanged)
@@ -375,6 +376,7 @@ public:
     int previewImageEdge() const { return preview_image_edge_; }
     QImage navigatorImage() const { return navigator_; }
     QVariantMap metadata() const;
+    QString captureSummary() const;
     QVariantList films() const { return films_; }
     QVariantList papers() const { return papers_; }
     int filmIndex() const { return film_index_; }

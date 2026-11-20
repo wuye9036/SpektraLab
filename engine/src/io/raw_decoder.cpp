@@ -104,6 +104,13 @@ bool capture_source_metadata(const LibRaw& raw, RawMetadata& metadata,
     }
     metadata.camera_raw = true;
     metadata.focal_mm = data.other.focal_len;
+    metadata.iso = data.other.iso_speed;
+    auto lensName = [](const auto& field) {
+        return std::string(std::begin(field), std::find(std::begin(field), std::end(field), '\0'));
+    };
+    metadata.lens_model = lensName(data.lens.Lens);
+    if (metadata.lens_model.find_first_not_of(' ') == std::string::npos)
+        metadata.lens_model = lensName(data.lens.makernotes.Lens);
     // identify() copies the tag into imgdata.color without its parsed-field
     // bit; an absent tag keeps LibRaw's -999 sentinel, which the range drops.
     const float baseline = data.color.dng_levels.baseline_exposure;

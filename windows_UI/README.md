@@ -586,7 +586,11 @@ radial profiles. Load LCP selects an external rectilinear RAW Adobe lens profile
 enables correction. Its distortion calibration is saved with the edit, so the file can later be moved.
 Remove profile restores the embedded profile where one is available.
 
-View › Reference grid offers a centre crosshair, thirds and a 10 × 10 grid. Guides stay fixed to the
+The header shows the filename, camera, aperture, shutter speed, ISO, lens and image dimensions.
+It omits missing EXIF fields.
+
+Beside Zoom In, click the grid icon to show or hide the last selected style. Its arrow offers
+a centre crosshair, thirds (the initial style) and a 10 × 10 grid. Guides stay fixed to the
 viewport while the photograph is zoomed or panned. They are excluded from exports.
 
 Nikon HE/HE* RAW remains explicitly unsupported by this LibRaw build. A failed

@@ -8,7 +8,7 @@ import SpektraLab.Native 1.0
 // (import, export), the tools (select, crop), Windows' undo / redo, the
 // Process and Original capsules, the photo's line (file · size · colour space
 // → display, with a warning badge when colour management falls back)
-// ...... before/after, the zoom pill, zoom out / in, the right rail's toggle.
+// ...... before/after, the zoom pill, zoom out / in, the reference grid, the right rail's toggle.
 // Both sidebar toggles live here, so each is on screen whichever rail is
 // folded.
 //
@@ -24,140 +24,173 @@ Rectangle {
     id: bar
     required property EditorState editor
     Layout.fillWidth: true
-    implicitHeight: Theme.headerBarHeight
+    readonly property bool compact: width < 1050
+    readonly property bool stacked: actionTools.implicitWidth + viewTools.implicitWidth + 2 * inset > width
+    readonly property int inset: compact ? 4 : Theme.barPadding
+    readonly property int toolsHeight: Theme.headerBarHeight * (stacked ? 2 : 1)
+    implicitHeight: toolsHeight + infoRow.implicitHeight + 4
     color: Theme.card
 
+    // On narrow canvases the zoom tools get their own row. The left tools can
+    // still scroll when both rails leave less space than their combined width.
+    Flickable {
+        x: bar.inset
+        width: (bar.stacked ? bar.width - bar.inset : viewTools.x) - x
+        height: Theme.headerBarHeight
+        contentWidth: actionTools.implicitWidth
+        contentHeight: height
+        clip: true
+        flickableDirection: Flickable.HorizontalFlick
+        boundsBehavior: Flickable.StopAtBounds
+        RowLayout {
+            id: actionTools
+            height: Theme.headerBarHeight
+            spacing: 0
+            // The application menu (shell/AppMenu.qml): where the Mac's menu bar
+            // commands are on Windows.
+            AppMenu { editor: bar.editor }
+            IconButton {
+                Layout.leftMargin: Theme.barIconGap
+                glyph: Icons.sidebarLeft; glyphSize: 15
+                toolTip: bar.editor.leftCollapsed ? L10n.tr("toolbar.showLeftRail") : L10n.tr("toolbar.hideLeftRail")
+                onClicked: bar.editor.leftCollapsed = !bar.editor.leftCollapsed
+            }
+            IconButton {
+                Layout.leftMargin: bar.compact ? 4 : Theme.barClusterGap
+                glyph: Icons.importFile
+                available: bar.editor.canBrowse
+                toolTip: L10n.tr("toolbar.importHelp")
+                reason: L10n.tr("toolbar.importHelp")
+                onClicked: bar.editor.importRequested()
+            }
+            IconButton {
+                Layout.leftMargin: Theme.barIconGap
+                glyph: Icons.exportFile
+                available: bar.editor.canExport
+                toolTip: L10n.tr("toolbar.exportHelp")
+                reason: L10n.tr("toolbar.exportHelp")
+                onClicked: bar.editor.openExport()
+            }
+            IconButton {
+                Layout.leftMargin: bar.compact ? 4 : Theme.barClusterGap
+                glyph: Icons.pointer
+                active: !bar.editor.cropMode
+                dimmed: bar.editor.cropMode
+                toolTip: L10n.tr("toolbar.selectHelp")
+                onClicked: if (bar.editor.cropMode) bar.editor.cancelCrop()
+            }
+            IconButton {
+                Layout.leftMargin: Theme.barIconGap
+                glyph: Icons.crop
+                active: bar.editor.cropMode
+                dimmed: !bar.editor.cropMode
+                available: bar.editor.canEditCrop
+                toolTip: bar.editor.cropMode ? L10n.tr("toolbar.cropFinishHelp") : L10n.tr("toolbar.cropHelp")
+                reason: L10n.tr("toolbar.cropHelp")
+                onClicked: bar.editor.toggleCrop()
+            }
+            IconButton {
+                Layout.leftMargin: bar.compact ? 4 : Theme.barClusterGap
+                buttonObjectName: "undoButton"
+                glyph: Icons.undo; glyphSize: 15
+                available: preview.settingsEditable && preview.canUndo && !bar.editor.cropMode
+                toolTip: L10n.tr("toolbar.undoHelp")
+                onClicked: preview.undo()
+            }
+            IconButton {
+                Layout.leftMargin: Theme.barIconGap
+                buttonObjectName: "redoButton"
+                glyph: Icons.redo; glyphSize: 15
+                available: preview.settingsEditable && preview.canRedo && !bar.editor.cropMode
+                toolTip: L10n.tr("toolbar.redoHelp")
+                onClicked: preview.redo()
+            }
+            // Process (TopBar.swift:79-82, Session.solveNow): the meter and the
+            // enlarger's neutral pack for this film and paper, then the Y/M shifts
+            // back to 0 and a reprint. An accent outline whenever it can run; the
+            // outcome goes to the status footer (EditorState.process).
+            PillButton {
+                objectName: "processButton"
+                Layout.leftMargin: bar.compact ? 6 : Theme.barActionLeading
+                outlined: true
+                text: L10n.tr("toolbar.process")
+                active: bar.editor.canProcess
+                available: bar.editor.canProcess
+                toolTip: L10n.tr("toolbar.processHelp")
+                reason: preview.hasFrame ? L10n.tr("toolbar.processUnavailable") : L10n.tr("toolbar.processHelp")
+                onClicked: bar.editor.process()
+            }
+            // Accent while the Original is showing -- pinned here or held with
+            // Space -- and muted otherwise (TopBar.swift `action`).
+            PillButton {
+                objectName: "originalButton"
+                Layout.leftMargin: bar.compact ? 3 : Theme.actionGap
+                outlined: true
+                text: L10n.tr("toolbar.original")
+                active: bar.editor.showingOriginal
+                available: preview.hasFrame && !preview.batchExporting
+                toolTip: bar.editor.originalPinned ? L10n.tr("toolbar.originalShowingHelp") : L10n.tr("toolbar.originalHelp")
+                reason: L10n.tr("toolbar.originalHelp")
+                onClicked: bar.editor.toggleOriginal()
+            }
+            // The soft proof (S): accent while the canvas shows the export
+            // recipe's colour space; beside it, while proofing, the gamut warning
+            // (Shift+S). Windows only -- the Mac proves on its export page.
+            PillButton {
+                objectName: "proofButton"
+                Layout.leftMargin: bar.compact ? 3 : Theme.actionGap
+                outlined: true
+                text: L10n.tr("toolbar.proof")
+                active: preview.softProof
+                available: bar.editor.canProof || preview.softProof
+                toolTip: L10n.tr("toolbar.proofHelp", [preview.proofState.space])
+                reason: preview.hasFrame ? L10n.tr("toolbar.proofUnavailable") : L10n.tr("toolbar.proofHelp", [preview.proofState.space])
+                onClicked: bar.editor.toggleSoftProof()
+            }
+            IconButton {
+                objectName: "gamutWarningButton"
+                Layout.leftMargin: Theme.barIconGap
+                visible: preview.softProof
+                glyph: Icons.warning; glyphSize: 13
+                active: preview.gamutWarning
+                toolTip: L10n.tr("toolbar.gamutWarningHelp", [preview.proofState.space])
+                onClicked: bar.editor.toggleGamutWarning()
+            }
+            BusyIndicator {
+                Layout.leftMargin: 10
+                Layout.preferredWidth: 18; Layout.preferredHeight: 18
+                running: preview.busy
+                visible: running
+            }
+        }
+    }
+
     RowLayout {
-        anchors.fill: parent
-        anchors.leftMargin: Theme.barPadding; anchors.rightMargin: Theme.barPadding
+        id: infoRow
+        x: bar.inset
+        y: bar.toolsHeight
+        width: bar.width - 2 * bar.inset
         spacing: 0
-        // The application menu (shell/AppMenu.qml): where the Mac's menu bar
-        // commands are on Windows.
-        AppMenu { editor: bar.editor }
-        IconButton {
-            Layout.leftMargin: Theme.barIconGap
-            glyph: Icons.sidebarLeft; glyphSize: 15
-            toolTip: bar.editor.leftCollapsed ? L10n.tr("toolbar.showLeftRail") : L10n.tr("toolbar.hideLeftRail")
-            onClicked: bar.editor.leftCollapsed = !bar.editor.leftCollapsed
-        }
-        IconButton {
-            Layout.leftMargin: Theme.barClusterGap
-            glyph: Icons.importFile
-            available: bar.editor.canBrowse
-            toolTip: L10n.tr("toolbar.importHelp")
-            reason: L10n.tr("toolbar.importHelp")
-            onClicked: bar.editor.importRequested()
-        }
-        IconButton {
-            Layout.leftMargin: Theme.barIconGap
-            glyph: Icons.exportFile
-            available: bar.editor.canExport
-            toolTip: L10n.tr("toolbar.exportHelp")
-            reason: L10n.tr("toolbar.exportHelp")
-            onClicked: bar.editor.openExport()
-        }
-        IconButton {
-            Layout.leftMargin: Theme.barClusterGap
-            glyph: Icons.pointer
-            active: !bar.editor.cropMode
-            dimmed: bar.editor.cropMode
-            toolTip: L10n.tr("toolbar.selectHelp")
-            onClicked: if (bar.editor.cropMode) bar.editor.cancelCrop()
-        }
-        IconButton {
-            Layout.leftMargin: Theme.barIconGap
-            glyph: Icons.crop
-            active: bar.editor.cropMode
-            dimmed: !bar.editor.cropMode
-            available: bar.editor.canEditCrop
-            toolTip: bar.editor.cropMode ? L10n.tr("toolbar.cropFinishHelp") : L10n.tr("toolbar.cropHelp")
-            reason: L10n.tr("toolbar.cropHelp")
-            onClicked: bar.editor.toggleCrop()
-        }
-        IconButton {
-            Layout.leftMargin: Theme.barClusterGap
-            buttonObjectName: "undoButton"
-            glyph: Icons.undo; glyphSize: 15
-            available: preview.settingsEditable && preview.canUndo && !bar.editor.cropMode
-            toolTip: L10n.tr("toolbar.undoHelp")
-            onClicked: preview.undo()
-        }
-        IconButton {
-            Layout.leftMargin: Theme.barIconGap
-            buttonObjectName: "redoButton"
-            glyph: Icons.redo; glyphSize: 15
-            available: preview.settingsEditable && preview.canRedo && !bar.editor.cropMode
-            toolTip: L10n.tr("toolbar.redoHelp")
-            onClicked: preview.redo()
-        }
-        // Process (TopBar.swift:79-82, Session.solveNow): the meter and the
-        // enlarger's neutral pack for this film and paper, then the Y/M shifts
-        // back to 0 and a reprint. An accent outline whenever it can run; the
-        // outcome goes to the status footer (EditorState.process).
-        PillButton {
-            objectName: "processButton"
-            Layout.leftMargin: Theme.barActionLeading
-            outlined: true
-            text: L10n.tr("toolbar.process")
-            active: bar.editor.canProcess
-            available: bar.editor.canProcess
-            toolTip: L10n.tr("toolbar.processHelp")
-            reason: preview.hasFrame ? L10n.tr("toolbar.processUnavailable") : L10n.tr("toolbar.processHelp")
-            onClicked: bar.editor.process()
-        }
-        // Accent while the Original is showing -- pinned here or held with
-        // Space -- and muted otherwise (TopBar.swift `action`).
-        PillButton {
-            objectName: "originalButton"
-            Layout.leftMargin: Theme.actionGap
-            outlined: true
-            text: L10n.tr("toolbar.original")
-            active: bar.editor.showingOriginal
-            available: preview.hasFrame && !preview.batchExporting
-            toolTip: bar.editor.originalPinned ? L10n.tr("toolbar.originalShowingHelp") : L10n.tr("toolbar.originalHelp")
-            reason: L10n.tr("toolbar.originalHelp")
-            onClicked: bar.editor.toggleOriginal()
-        }
-        // The soft proof (S): accent while the canvas shows the export
-        // recipe's colour space; beside it, while proofing, the gamut warning
-        // (Shift+S). Windows only -- the Mac proves on its export page.
-        PillButton {
-            objectName: "proofButton"
-            Layout.leftMargin: Theme.actionGap
-            outlined: true
-            text: L10n.tr("toolbar.proof")
-            active: preview.softProof
-            available: bar.editor.canProof || preview.softProof
-            toolTip: L10n.tr("toolbar.proofHelp", [preview.proofState.space])
-            reason: preview.hasFrame ? L10n.tr("toolbar.proofUnavailable") : L10n.tr("toolbar.proofHelp", [preview.proofState.space])
-            onClicked: bar.editor.toggleSoftProof()
-        }
-        IconButton {
-            objectName: "gamutWarningButton"
-            Layout.leftMargin: Theme.barIconGap
-            visible: preview.softProof
-            glyph: Icons.warning; glyphSize: 13
-            active: preview.gamutWarning
-            toolTip: L10n.tr("toolbar.gamutWarningHelp", [preview.proofState.space])
-            onClicked: bar.editor.toggleGamutWarning()
-        }
-        BusyIndicator {
-            Layout.leftMargin: 10
-            Layout.preferredWidth: 18; Layout.preferredHeight: 18
-            running: preview.busy
-            visible: running
-        }
         // The photo's line: what is open and at what size, and -- in the
         // accent -- that the canvas is about to change.
         Text {
             id: photoLine
-            Layout.leftMargin: 12
+            objectName: "photoHeader"
+            Layout.leftMargin: 4
             Layout.fillWidth: true
-            Layout.minimumWidth: 40
-            text: preview.hasFrame ? preview.fileName + "  ·  " + preview.metadata.width + "×" + preview.metadata.height : preview.status
+            Layout.minimumWidth: 0
+            text: {
+                if (!preview.hasFrame) return preview.status
+                const parts = [preview.fileName]
+                if (preview.captureSummary) parts.push(preview.captureSummary)
+                parts.push(preview.metadata.width + "×" + preview.metadata.height)
+                return parts.join("  ·  ")
+            }
+            wrapMode: Text.Wrap
+            maximumLineCount: 3
             textFormat: Text.PlainText
             elide: Text.ElideRight
-            color: Theme.dim
+            color: Theme.secondaryText
             font: Theme.forText(preview.hasFrame ? Theme.filenameFont : Theme.captionFont, text)
             HoverHandler { id: lineHover }
             ToolTip.visible: lineHover.hovered && photoLine.truncated
@@ -173,7 +206,8 @@ Rectangle {
             id: colourLine
             objectName: "colourLine"
             Layout.leftMargin: 8
-            Layout.maximumWidth: 190
+            Layout.minimumWidth: 0
+            Layout.maximumWidth: Math.min(190, bar.width * 0.24)
             visible: preview.hasFrame
             readonly property string frameSpace: preview.metadata.colorSpace ? preview.metadata.colorSpace : L10n.tr("toolbar.colourSpace")
             // "HP Z31x - HP Z31x AdobeRGB Profile.icm" -> "HP Z31x".
@@ -213,6 +247,15 @@ Rectangle {
             color: Theme.accent
             font: Theme.forText(Theme.captionFont, text)
         }
+    }
+
+    RowLayout {
+        id: viewTools
+        anchors.right: parent.right
+        anchors.rightMargin: bar.inset
+        y: bar.stacked ? Theme.headerBarHeight : 0
+        height: Theme.headerBarHeight
+        spacing: 0
         // Before / after (BeforeAfterIcon.swift, traced from the drawing on
         // its 60.8 x 48.11 box into 25 x 16): the outlined frame, the divider,
         // the half-filled picture -- accent while the split is up. Y or
@@ -220,7 +263,7 @@ Rectangle {
         Item {
             id: compare
             objectName: "compareButton"
-            Layout.leftMargin: 16
+            Layout.leftMargin: bar.compact ? 2 : 16
             Layout.preferredWidth: Theme.toolButton; Layout.preferredHeight: Theme.toolButton
             readonly property bool available: bar.editor.canCompare
             readonly property color ink: bar.editor.comparing ? Theme.accent : Theme.text
@@ -246,7 +289,7 @@ Rectangle {
         Item {
             id: zoomPill
             objectName: "zoomPill"
-            Layout.leftMargin: 20
+            Layout.leftMargin: bar.compact ? 4 : 20
             Layout.preferredWidth: Math.max(Theme.zoomPillWidth, zoomText.implicitWidth + 14)
             Layout.preferredHeight: Theme.zoomPillHeight
             readonly property bool available: preview.hasFrame && !bar.editor.zoomLocked
@@ -287,7 +330,7 @@ Rectangle {
             }
         }
         IconButton {
-            Layout.leftMargin: Theme.zoomGap
+            Layout.leftMargin: bar.compact ? 2 : Theme.zoomGap
             glyph: Icons.zoomOut
             available: bar.editor.canZoomOut
             toolTip: L10n.tr("toolbar.zoomOut")
@@ -299,8 +342,12 @@ Rectangle {
             toolTip: L10n.tr("toolbar.zoomIn")
             onClicked: bar.editor.zoomIn()
         }
+        GridButton {
+            Layout.leftMargin: Theme.barIconGap
+            editor: bar.editor
+        }
         IconButton {
-            Layout.leftMargin: Theme.barClusterGap
+            Layout.leftMargin: bar.compact ? 4 : Theme.barClusterGap
             glyph: Icons.sidebarRight; glyphSize: 15
             toolTip: bar.editor.rightCollapsed ? L10n.tr("toolbar.showRightRail") : L10n.tr("toolbar.hideRightRail")
             onClicked: bar.editor.rightCollapsed = !bar.editor.rightCollapsed
