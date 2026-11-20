@@ -103,6 +103,7 @@ bool capture_source_metadata(const LibRaw& raw, RawMetadata& metadata,
         metadata.camera_white_level_per_channel[c] = color.linear_max[c];
     }
     metadata.camera_raw = true;
+    metadata.focal_mm = data.other.focal_len;
     // identify() copies the tag into imgdata.color without its parsed-field
     // bit; an absent tag keeps LibRaw's -999 sentinel, which the range drops.
     const float baseline = data.color.dng_levels.baseline_exposure;
@@ -145,6 +146,7 @@ bool capture_source_metadata(const LibRaw& raw, RawMetadata& metadata,
 // with the stream at the tag's value.
 struct ExifTags {
     std::string date;
+    EmbeddedLens::Curve sony_distortion;
     int program = 0;
     bool has_bias = false;
     double bias = 0.0;
@@ -160,6 +162,22 @@ void exif_tag(void* context, int tag, int type, int len, unsigned int order, voi
     auto& tags = *static_cast<ExifTags*>(context);
     auto* in = static_cast<LibRaw_abstract_datastream*>(stream);
     unsigned char b[32] = {};
+    // LibRaw encodes the TIFF IFD in the high bits. Sony's 0x7037 is a
+    // counted array of signed distortion knots in units of 2^-14.
+    if ((tag & 0xffff) == 0x7037 && (type == 8 || type == 3) && len >= 3 && len <= 256) {
+        if (in->read(b, 1, 2) != 2) return;
+        const int count = int(exif_word(b, 2, order));
+        if (count < 2 || count >= len) return;
+        EmbeddedLens::Curve curve;
+        for (int i = 0; i < count; ++i) {
+            if (in->read(b, 1, 2) != 2) return;
+            const float scale = 1.f + std::int16_t(exif_word(b, 2, order)) / 16384.f;
+            if (scale <= 0) return;
+            curve.push_back(scale);
+        }
+        if (std::any_of(curve.begin(), curve.end(), [](float v) { return v != 1; }))
+            tags.sony_distortion = std::move(curve);
+    }
     if (tag == 0x9003 && type == 2 && len >= 10 && tags.date.empty()) {  // DateTimeOriginal
         const int n = std::min(len, 31);
         if (in->read(b, 1, n) == n) tags.date.assign(reinterpret_cast<const char*>(b), std::size_t(std::min(n, 19)));
@@ -171,6 +189,19 @@ void exif_tag(void* context, int tag, int type, int len, unsigned int order, voi
             if (den != 0) { tags.has_bias = true; tags.bias = double(num) / double(den); }
         }
     }
+}
+
+EmbeddedLens embedded_profile(const LibRaw& raw, const ExifTags& tags) {
+    if (raw.imgdata.idata.dng_version) {
+        const auto& op = raw.imgdata.color.dng_levels.rawopcodes[2];
+        if (op.data) return dng_lens({static_cast<const std::uint8_t*>(op.data), op.len});
+    } else if (std::strncmp(raw.imgdata.idata.make, "Sony", 4) == 0 ||
+               std::strncmp(raw.imgdata.idata.make, "SONY", 4) == 0) {
+        EmbeddedLens lens;
+        lens.scales[0] = tags.sony_distortion;
+        return lens;
+    }
+    return {};
 }
 
 // ShootingData.init(exif:) and .day(_:) (Session+FilmEdge.swift:58-79): a
@@ -322,6 +353,7 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
         if (!libraw_ok(open_status, "RAW open", error)) return false;
         if (!supported_compression(*raw, error)) return false;
         capture_shooting_data(*raw, exif, decoded.metadata.shooting);
+        decoded.metadata.lens_profile = embedded_profile(*raw, exif);
 
         start = Clock::now();
         const int unpack_status = raw->unpack();
@@ -453,6 +485,7 @@ bool decode_raw_headroom(const std::filesystem::path& source, const std::array<f
         if (!libraw_ok(open_status, "RAW open", error)) return false;
         if (!supported_compression(*raw, error)) return false;
         capture_shooting_data(*raw, exif, decoded.metadata.shooting);
+        decoded.metadata.lens_profile = embedded_profile(*raw, exif);
 
         start = Clock::now();
         const int unpack_status = raw->unpack();

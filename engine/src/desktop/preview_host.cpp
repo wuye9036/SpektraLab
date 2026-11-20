@@ -102,6 +102,7 @@ Catalog read_catalog(const fs::path& resources) {
         // stock that names no paper.
         stock.is_cine = info_text(info, "use") == "cine";
         stock.is_monochrome = info_text(info, "channel_model") == "bw";
+        stock.has_edr = profile.at("data").at("edr_tone_map").is_object();
         stock.target_print = info_text(info, "target_print");
         if (stage == "filming") catalog.films.push_back(std::move(stock));
         else if (stage == "printing") catalog.papers.push_back(std::move(stock));
@@ -274,6 +275,9 @@ const std::vector<Row>& rows() {
         // developed film instead of printing it, the paper kept for when it
         // comes back. A slide is scanned whatever this says (wire_params).
         t.push_back(boolean("scan_film", "No print profile", PRINT, false));
+        t.push_back(boolean("extended_dynamic_range", "Extended dynamic range", PRINT, false));
+        t.push_back(product("lens_correction", "Lens correction", SHOOT, false));
+        t.push_back(product("lens_profile", "Lens profile", SHOOT, {}, ""));
         // Print Effects (PrintProfileSection.swift:152-164, Params.swift:641):
         // off leaves the paper's colour transformation and nothing else -- no
         // glare, no pre-flash -- and forgets neither (wire_params).
@@ -637,7 +641,10 @@ std::string check_setting(const SettingField& field, const SettingValue& value, 
             return field.label + " must be between " + number_text(field.low) + " and " + number_text(field.high);
     } else if (field.type == SettingType::text) {
         const auto& v = std::get<std::string>(value);
-        if (field.choices == SettingChoices::free) {
+        if (field.key == "lens_profile") {
+            io::EmbeddedLens lens;
+            if (!v.empty() && !imported_lens_profile(v, lens)) return "Invalid saved lens profile";
+        } else if (field.choices == SettingChoices::free) {
             // What a date back's faces can print: one short line of ASCII.
             if (v.size() > kFreeTextMax ||
                 std::any_of(v.begin(), v.end(), [](unsigned char c) { return c < 0x20 || c > 0x7E; }))
@@ -919,7 +926,7 @@ EngineCut gate_framed(const EngineCut& cut, const RenderSettings& settings, std:
 
 bool per_photo_setting(std::string_view key) {
     return key.starts_with("overscan_") || key.starts_with("date_imprint_") || key.starts_with("date_back_") ||
-           key == "film_edge_seeded";
+           key == "film_edge_seeded" || key == "lens_profile" || key == "lens_correction";
 }
 
 RenderSettings synced_settings(const RenderSettings& from, const RenderSettings& recipient) {
@@ -962,6 +969,8 @@ Json wire_params(const RenderSettings& settings, const Catalog& catalog, const P
     // positive and must bypass negative-to-paper printing. The generic
     // engine API still permits deliberate positive-to-paper experiments.
     wire.set("scan_film", Json((film && film->is_positive) || std::get<bool>(settings.get("scan_film"))));
+    wire.set("extended_dynamic_range", Json(paper && paper->has_edr && !wire.at("scan_film").as_bool() &&
+                                            std::get<bool>(settings.get("extended_dynamic_range"))));
     // Print Effects is a gate on the wire, so turning it back on restores
     // exactly what was there (Params.swift:756, :759).
     wire.set("glare_active", Json(settings.glare_active && print_effects));
@@ -1072,10 +1081,6 @@ Json opening_params(const RenderSettings& settings, const Catalog& catalog, cons
     params.set("input_cctf_decoding", Json(false));
     params.set("output_color_space", Json(output_color_space));
     params.set("output_cctf_encoding", Json(true));
-    // EDR maps the print's highlights above 1.0 (pipeline.cpp node_edr), and
-    // this host's output is an SDR sRGB frame that spk_to_rgba16 clamps to
-    // 1.0: the extended range would only clip. Off, as on a silver paper.
-    params.set("extended_dynamic_range", Json(false));
     // SpektraLab's defaults rather than the reference's, asked for by name
     // as macOS does (Session.swift openDelta): Film Exposure then moves the
     // finished print's brightness. Without it the enlarger re-times the print
@@ -1346,7 +1351,10 @@ std::string hole_key(const PairHole& hole, DecodeMode mode) {
                   static_cast<unsigned long long>(ec ? 0 : size), static_cast<long long>(stamp), int(mode),
                   wb.mode.c_str(), wb.as_shot() ? 0.0 : wb.temperature, wb.as_shot() ? 0.0 : wb.tint, g.x, g.y, g.w, g.h,
                   g.quarter_turns, int(g.flip_h), int(g.flip_v), g.straighten_deg);
-    return utf8(fs::absolute(hole.source)) + tail;
+    auto key = utf8(fs::absolute(hole.source)) + tail;
+    if (std::get<bool>(hole.decode.get("lens_correction")))
+        key += "|lens:" + std::get<std::string>(hole.decode.get("lens_profile"));
+    return key;
 }
 
 // What the meter chooses for one picture alone (Session.pairExposure,

@@ -16,8 +16,7 @@ import QtQuick.Layouts
 // choosing a paper again prints on it.
 //
 // Print Effects (glare and pre-flash, their settings kept) means nothing
-// without a print, so it greys with No Print Profile. EDR keeps its row but
-// is unavailable: the Windows canvas and files are SDR.
+// without a print, so it greys with No Print Profile. EDR uses the selected paper's calibrated tone map.
 MacSection {
     id: section
     sectionId: "print"
@@ -64,9 +63,11 @@ MacSection {
         CheckRow {
             label: L10n.tr("print.edr")
             sublabel: L10n.tr("print.edrScope")
-            checked: false
-            available: false
-            reason: L10n.tr("print.reason.edrWindows")
+            objectName: "edrRow"
+            checked: preview.edrAvailable && preview.parameters.extended_dynamic_range === true
+            available: preview.settingsEditable && preview.edrAvailable
+            reason: preview.edrAvailable ? "" : L10n.tr("print.reason.edrPaper")
+            onToggledTo: function(on) { preview.setParameter("extended_dynamic_range", on) }
         }
     }
 }

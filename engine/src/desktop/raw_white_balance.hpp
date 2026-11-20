@@ -50,6 +50,7 @@ const std::vector<WhiteBalancePreset>& white_balance_presets();
 
 // Whether two settings decode the same pixels: both As Shot, or both the same
 // Temperature and Tint (a preset and Custom at its numbers are one decode).
+bool imported_lens_profile(const std::string& record, io::EmbeddedLens& lens);
 bool same_decode(const RenderSettings& a, const RenderSettings& b);
 
 // The camera's own illuminant, as Temperature/Tint, from a decode's metadata

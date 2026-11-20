@@ -13,6 +13,10 @@
 //  - the controller's Pre-Dev API with no photograph open.
 #include "PreviewController.hpp"
 #include "LatitudeModel.hpp"
+#include "LensProfile.hpp"
+#include "desktop/raw_white_balance.hpp"
+#include <QTemporaryFile>
+#include <QDataStream>
 #include "WhiteBalance.hpp"
 #include "FrameOutput.hpp"
 #include "core/json.hpp"
@@ -357,6 +361,78 @@ void white_balance_rules() {
 
 // --- the eyedropper's geometry ----------------------------------------------------
 
+void embedded_dng() {
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly); // DNG opcodes are big-endian even in a little-endian TIFF.
+    stream << quint32(2) << quint32(1) << quint32(0x01030000) << quint32(0) << quint32(68) << quint32(1);
+    for (double v : {1., -.2, 0., 0., 0., 0., .25, .75}) stream << v;
+    stream << quint32(3) << quint32(0x01030000) << quint32(0) << quint32(56);
+    for (double v : {.4, 0., 0., 0., 0., .5, .5}) stream << v;
+    const std::span<const std::uint8_t> input(reinterpret_cast<const std::uint8_t*>(bytes.constData()), size_t(bytes.size()));
+    const auto profile = spk::io::dng_lens(input);
+    check(profile.available() && near(profile.scales[0].back(), .8, 1e-6) && near(profile.gain.back(), 1.4, 1e-6)
+          && profile.warp_center[1] == .75, "DNG embedded warp and vignette");
+    check(!spk::io::dng_lens(input.first(input.size()-1)).available(), "truncated DNG supplied a partial calibration");
+}
+
+void imported_lens(const QString& scratch) {
+    QTemporaryFile file(scratch + "/lens-XXXXXX.lcp");
+    check(file.open(), "cannot create test LCP");
+    file.write(R"(<CameraProfiles xmlns:rdf="urn:rdf"><rdf:Seq>
+        <rdf:li FocalLength="20" SensorFormatFactor="1"><PerspectiveModel FocalLengthX="1" RadialDistortParam1="-0.1"/></rdf:li>
+        <rdf:li><rdf:Description><FocalLength>40</FocalLength><PerspectiveModel><rdf:Description>
+        <FocalLengthX>1</FocalLengthX><RadialDistortParam1>-0.3</RadialDistortParam1>
+        <ChromaticGreenModel RadialDistortParam1="0.9"/></rdf:Description></PerspectiveModel></rdf:Description></rdf:li>
+        </rdf:Seq></CameraProfiles>)");
+    file.flush();
+    spk::io::DecodedRaw frame;
+    frame.width = frame.height = 41;
+    frame.metadata.sizes_before_postprocess.width = frame.metadata.sizes_before_postprocess.height = 41;
+    frame.metadata.focal_mm = 30;
+    auto record = readLensProfile(file.fileName(), frame.metadata).toStdString();
+    spk::io::EmbeddedLens lens;
+    check(desktop::imported_lens_profile(record, lens), "could not import rectilinear LCP");
+    check(near(lens.scales[0].back(), .9, 1e-5), "LCP focal interpolation or radial normalization");
+    frame.rgb.resize(41*41*3);
+    for (int y=0; y<41; ++y) for (int x=0; x<41; ++x)
+        std::fill_n(frame.rgb.data()+(y*41+x)*3, 3, float(x));
+    spk::io::apply_lens_profile(frame, lens);
+    check(frame.rgb[0] > 1.8 && frame.rgb[0] < 2.0 && frame.rgb[(20*41+20)*3] == 20,
+          "LCP did not sample the expected source position");
+    desktop::RenderSettings off, enabled;
+    enabled.set("lens_profile",record);
+    check(desktop::same_decode(off, enabled), "disabled profile changed the decode");
+    enabled.set("lens_correction",true);
+    check(!desktop::same_decode(off, enabled), "enabled profile reused the old decode");
+}
+
+// Optional fixture check: compare the decode actually handed to the engine,
+// with the same settings used by the canvas and full-resolution export.
+void real_lens(const QString& source, const QString& lcp) {
+    const std::filesystem::path path(source.toStdWString());
+    desktop::RenderSettings settings;
+    spk::io::DecodedRaw frame;
+    std::string error;
+    auto samples = [&] {
+        check(desktop::decode_raw(path, desktop::DecodeMode::compatible16, settings, frame, error), "RAW decode: " + error);
+        std::vector<float> out;
+        for (size_t i=0; i<frame.rgb.size(); i+=1009) out.push_back(frame.rgb[i]);
+        return out;
+    };
+    const auto off = samples();
+    const auto record = readLensProfile(lcp, frame.metadata).toStdString();
+    check(!record.empty(), "selected external profile unreadable");
+    settings.set("lens_correction",true);
+    if (frame.metadata.lens_profile.available()) {
+        check(samples() != off, "embedded profile left the decoded pixels unchanged");
+        std::puts("embedded profile changed the RAW pixels");
+    }
+    settings.set("lens_profile",record);
+    check(samples() != off, "external profile left the decoded pixels unchanged");
+    settings.set("lens_correction",false);
+    check(samples() == off, "disabling the profile did not recover the original pixels");
+}
+
 void eyedropper_geometry() {
     // Each source pixel holds its own coordinates (x * 1000, y * 1000), so a
     // pixel of any rendered geometry -- interpolated or not -- names the
@@ -458,9 +534,16 @@ int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
     try {
         const auto args = application.arguments();
+        if (args.size() == 4 && args[1] == "--lens") {
+            real_lens(args[2], args[3]);
+            std::puts("RAW external lens correction and restoration passed");
+            return 0;
+        }
         check(args.size() == 3, "usage: spk_qt_predev_test <resources> <scratch-directory>");
         check(QDir().mkpath(args[2]), "cannot create scratch directory");
         const std::filesystem::path resources(args[1].toStdWString());
+        embedded_dng();
+        imported_lens(args[2]);
         readout_rules();
         tone_mask_curve();
         white_balance_rules();

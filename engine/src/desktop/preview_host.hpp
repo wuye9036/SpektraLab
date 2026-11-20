@@ -39,6 +39,7 @@ struct Stock {
     bool is_cine = false;
     bool is_monochrome = false;
     std::string target_print;
+    bool has_edr = false;
 };
 struct Catalog {
     std::vector<Stock> films, papers;

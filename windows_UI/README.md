@@ -232,9 +232,7 @@ Windows carries out (Import, Export, Undo, Redo, Select All Photos, Sync
 Settings, Reset This Photo's Settings, View, Settings, About, Exit), each with
 its key.
 
-Still greyed, with the reason on hover: Lens Correction (LibRaw has no lens
-profiles), Extended Dynamic Range print profiles (no HDR output path), the
-paper list's Digital group on the canvas (no Cineon view of the canvas yet;
+Still greyed, with the reason on hover: the paper list's Digital group on the canvas (no Cineon view of the canvas yet;
 the Digital Intermediate *export* works), and in Settings every Mac setting
 without a Windows backend (below).
 
@@ -310,7 +308,7 @@ sent to the engine by its wire name; new photos take the macOS defaults.
   Temperature (2000-12000 K) and Tint (-150..150) with each row's As Shot box,
   greyed for a camera LibRaw has no matrix for -- the white balance presets
   and the neutral picker (one click on the picture). Vignetting is the
-  Post-Dev grade's lens fall-off, as on the Mac. Lens Correction stays greyed.
+  Post-Dev grade's lens fall-off, as on the Mac. Lens Correction uses the photograph's embedded profile or a selected LCP.
 - **Film Format**: the film's size and side, which scale grain, halation and
   coupler diffusion in micrometres, and every effect row with its switch and
   strength.
@@ -580,8 +578,16 @@ its Layer 2 texture; the Original is put into the session's space; the
 Digital Intermediate carries ProPhoto primaries, which its view LUTs assume.
 The GDI viewer (`engine/tools/windows_preview.cpp`) keeps the host's sRGB
 default and its BGRA8. TIFF and PNG16 retain 16-bit pixels; PNG8/JPEG8 use
-8-bit samples, and resizing is explicitly requested. Output is SDR: EDR/HDR
-output is future work.
+8-bit samples, and resizing is explicitly requested. Print › Extended Dynamic Range uses the selected paper's calibrated SDR tone map on the canvas,
+proof and export. It is available with calibrated colour papers.
+
+Input / Camera › Lens Correction reads embedded Sony ARW distortion and supported DNG OpcodeList3
+radial profiles. Load LCP selects an external rectilinear RAW Adobe lens profile for this photo and
+enables correction. Its distortion calibration is saved with the edit, so the file can later be moved.
+Remove profile restores the embedded profile where one is available.
+
+View › Reference grid offers a centre crosshair, thirds and a 10 × 10 grid. Guides stay fixed to the
+viewport while the photograph is zoomed or panned. They are excluded from exports.
 
 Nikon HE/HE* RAW remains explicitly unsupported by this LibRaw build. A failed
 NEF open must leave the previous photo and its session usable.

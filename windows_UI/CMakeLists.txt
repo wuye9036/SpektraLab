@@ -152,7 +152,7 @@ add_dependencies(SpektraLabQt spektralab_qt_resources)
 # The Pre-Dev rail's backend: PreviewController's white balance, Process,
 # Latitude, Scene Placement and Tone Mask (PreviewControllerPredev.cpp).
 # Every target that compiles PreviewController.cpp compiles these with it.
-set(spektralab_predev_sources src/PreviewControllerPredev.cpp
+set(spektralab_predev_sources src/PreviewControllerPredev.cpp src/LensProfile.cpp
     src/LatitudeModel.hpp src/LatitudeModel.cpp src/WhiteBalance.hpp src/WhiteBalance.cpp)
 target_sources(SpektraLabQt PRIVATE ${spektralab_predev_sources})
 

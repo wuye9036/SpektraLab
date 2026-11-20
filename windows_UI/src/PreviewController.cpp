@@ -545,7 +545,9 @@ void PreviewController::accept(Reply reply) {
             // A new decode (another photo, or another decode mode) makes the
             // held Original stale; a re-render of the same decode does not.
             const bool decodeChanged=!frame_||frame_->source!=reply.frame->source||
-                frame_->decode_mode!=reply.frame->decode_mode||reply.operation=="open";
+                frame_->decode_mode!=reply.frame->decode_mode || reply.operation=="open" ||
+                !desktop::same_decode(frame_->settings,reply.frame->settings) ||
+                (reply.frame->pair && !desktop::same_piece(frame_->pair_input,reply.frame->pair_input));
             // A picture still being made from the old frame no longer applies.
             retireVisible();
             frame_=std::move(reply.frame);full_image_=std::move(published.full);
@@ -707,7 +709,7 @@ QRectF PreviewController::cutPictureRect() const {
     if(!frame_)return;
     const auto token=++original_token_;original_pending_=true;original_error_.clear();
     const auto whole=original_full_;const auto geometry=geometry_;const auto encoding=frame_->encoding;
-    const auto source=frame_->source;const auto mode=frame_->decode_mode;
+    const auto shown=frame_;
     const QSize size=decodeSize();
     // A cut frame's print is the film around the picture the engine was
     // handed: the Original is that picture -- the decode cut by the frame's
@@ -720,7 +722,7 @@ QRectF PreviewController::cutPictureRect() const {
     const QPoint gate=cut?cutPictureRect().topLeft().toPoint():QPoint();
     original_for_=frame_.get();
     {std::lock_guard lock(mutex_);
-     jobs_.push_back([whole,geometry,encoding,source,mode,size,token,cut,cutGeometry,strip,gate](desktop::PreviewHost& host){
+     jobs_.push_back([whole,geometry,encoding,shown,size,token,cut,cutGeometry,strip,gate](desktop::PreviewHost& host){
         Reply r;r.operation="original";r.original_token=token;r.original_geometry=geometry;
         try {
             QElapsedTimer clock;clock.start();
@@ -729,7 +731,9 @@ QRectF PreviewController::cutPictureRect() const {
                 // Only the decode this frame was developed from: the host
                 // may have moved on (another photo, a failed publication).
                 const auto current=host.current();
-                if(!current||current->source!=source||current->decode_mode!=mode)
+                if(!current || current->source!=shown->source || current->decode_mode!=shown->decode_mode ||
+                   !desktop::same_decode(current->settings,shown->settings) ||
+                   (shown->pair && !desktop::same_piece(current->pair_input,shown->pair_input)))
                     throw std::runtime_error("The decode behind this photo is no longer held");
                 full=desktop::display::originalImage(host.decoded(),encoding);
                 if(full.size()!=size)throw std::runtime_error("The Original does not match the developed frame's size");
@@ -871,6 +875,15 @@ void PreviewController::resetEnlarger() {
 }
 bool PreviewController::filmIsMonochrome() const {const auto* film=currentFilm();return film&&film->is_monochrome;}
 bool PreviewController::noPrintProfile() const {return filmIsPositive()||scanFilmSetting();}
+bool PreviewController::edrAvailable() const {
+    const auto* paper = catalog_.paper(currentPaper());
+    return !noPrintProfile() && paper && paper->has_edr;
+}
+bool PreviewController::lensCorrectionAvailable() const {
+    const auto* metadata = shotMetadata();
+    return metadata && metadata->camera_raw &&
+           (metadata->lens_profile.available() || !std::get<std::string>(extra_settings_.get("lens_profile")).empty());
+}
 QString PreviewController::printSelection() const {return noPrintProfile()?noPrintProfileId:text(currentPaper());}
 bool PreviewController::canUseFilmPaper() const {
     // Disabled for a slide, which declares no paper (PrintProfileSection.swift:206).
@@ -1044,7 +1057,7 @@ QVariantList PreviewController::parameterFields() const {
             if(field.choices==desktop::SettingChoices::listed) {
                 QStringList choices;for(const auto& choice:field.listed)choices.append(text(choice));
                 row["choices"]=choices;
-            } else row["catalog"]=field.choices==desktop::SettingChoices::films?"films":"papers";
+            } else if(field.choices!=desktop::SettingChoices::free) row["catalog"]=field.choices==desktop::SettingChoices::films?"films":"papers";
         }
         result.push_back(row);
     }
@@ -1074,6 +1087,8 @@ void PreviewController::setAdjustment(const QString& name,const QVariant& value)
 }
 bool PreviewController::applyParameter(const desktop::SettingField& field,desktop::SettingValue value) {
     if(!settingsEditable()||!desktop::check_setting(field,value,&catalog_).empty())return false;
+    if (field.key=="lens_correction" && std::get<bool>(value) && !lensCorrectionAvailable()) return false;
+    if (field.key=="extended_dynamic_range" && std::get<bool>(value) && !edrAvailable()) return false;
     // The stocks and the brightness keep their own state (catalogue indexes,
     // stops) and their own rules: the paper follows the film, no paper for a
     // slide, silver film on silver paper (selectFilm / selectPaper).

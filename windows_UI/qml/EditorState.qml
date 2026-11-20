@@ -15,6 +15,8 @@ QtObject {
     // scale through resetView(), `fit` and `scalePercent` rather than through
     // the canvas's id, which lives in another file.
     property FrameCanvas canvas: null
+    // Number of equal divisions of the canvas viewport on each axis. Zero hides the guides.
+    property int gridDivisions: 0
     // The canvas is assigned after the panes' first bindings run; until then
     // these read as the canvas's own defaults (fit, 100 %), not as an error.
     readonly property bool fit: canvas ? canvas.fit : true

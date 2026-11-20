@@ -1,5 +1,7 @@
 #pragma once
 
+#include "embedded_lens.hpp"
+
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -77,6 +79,8 @@ struct RawMetadata {
     double white_balance_exposure_restore = 1.0;
     std::array<float, 12> camera_to_output{};
     ShootingData shooting;
+    EmbeddedLens lens_profile;
+    double focal_mm = 0;
     // Set by the two RAW policies (capture_source_metadata): the data is
     // sensor response. False for a flat file decoded at the door, which is
     // already somebody's rendering of a scene.

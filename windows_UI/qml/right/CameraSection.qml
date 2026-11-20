@@ -1,5 +1,8 @@
+import SpektraLab.Native 1.0
 import QtQml
 import QtQuick
+import QtQuick.Layouts
+import QtQuick.Dialogs
 import QtQuick.Controls
 
 // Input / Camera (CameraSection.swift): how the photograph enters the film.
@@ -32,7 +35,7 @@ import QtQuick.Controls
 //
 // Vignetting is the Mac's Layer 2 lens fall-off: the Post-Dev grade's
 // vignette (PostDevSlider, `vignette.amount`), which the Mac shows here and
-// only here. Lens Correction is greyed because LibRaw has no lens profiles.
+// only here. Lens Correction uses the selected RAW's embedded profile.
 MacSection {
     id: section
     sectionId: "camera"
@@ -48,6 +51,12 @@ MacSection {
     readonly property string method: preview.aeMethod
     readonly property string legacyName: preview.parameters.auto_exposure_method === undefined ? "" : String(preview.parameters.auto_exposure_method)
     readonly property real filmExposure: preview.adjustments.filmExposureEv === undefined ? 0 : Number(preview.adjustments.filmExposureEv)
+    property bool lensImportFailed: false
+    Connections {
+        target: preview
+        function onSourceOpened() { section.lensImportFailed = false }
+    }
+    readonly property string lensRecord: preview.parameters.lens_profile || ""
     readonly property var wb: preview.whiteBalance
     readonly property var meter: preview.metering
     // The white balance rows: settings unlocked, and a camera LibRaw can
@@ -215,8 +224,39 @@ MacSection {
     }
     CheckRow {
         label: L10n.tr("camera.lensCorrection")
-        checked: false
-        available: false
-        reason: L10n.tr("camera.lensCorrectionReason")
+        objectName: "lensCorrectionRow"
+        checked: preview.lensCorrectionAvailable === true && preview.parameters.lens_correction === true
+        available: preview.settingsEditable && preview.lensCorrectionAvailable === true
+        reason: preview.lensCorrectionAvailable ? "" : L10n.tr("camera.lensCorrectionReason")
+        onToggledTo: function(on) { preview.setParameter("lens_correction", on) }
+    }
+    RowLayout {
+        PillButton {
+            text: L10n.tr("lens.choose")
+            available: preview.settingsEditable && section.wb.cameraRaw === true
+            onClicked: { section.lensImportFailed = false; lensDialog.openRemembered() }
+        }
+        PillButton {
+            visible: section.lensRecord.length > 0
+            text: L10n.tr("lens.remove")
+            available: preview.settingsEditable
+            onClicked: { section.lensImportFailed = false; preview.chooseLensProfile("") }
+        }
+    }
+    Note {
+        visible: section.lensImportFailed || section.lensRecord.length > 0
+        text: section.lensImportFailed ? L10n.tr("lens.invalid") : section.lensRecord ? JSON.parse(section.lensRecord).name : ""
+    }
+    RememberedDialog {
+        id: lensDialog
+        folder: function() { return AppSettings.dialogFolder("lens") }
+        dialog: FileDialog {
+            title: L10n.tr("lens.choose")
+            nameFilters: ["Adobe Lens Correction Profile (*.lcp)"]
+            onAccepted: {
+                AppSettings.rememberDialogFolder("lens", selectedFile)
+                section.lensImportFailed = !preview.chooseLensProfile(selectedFile)
+            }
+        }
     }
 }

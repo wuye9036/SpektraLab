@@ -365,11 +365,14 @@ private:
                 checks_["display_target"]=ColorPipeline::forWindow(&window_)->displayName();
                 if(!capture("fit"))return;
                 if(!require(canvas_->fit()&&canvas_->image().cacheKey()==controller_.previewImage().cacheKey(),"canvas_matches_published_frame"))return;
+                if (!checkGridModes()) return;
                 canvas_->resetView(false);
                 later([this]{
                     const auto rect=canvas_->imageRect();
                     const auto ratio=window_.effectiveDevicePixelRatio();
                     if(!require(std::abs(rect.width()*ratio-original_->width())<0.01&&std::abs(canvas_->scalePercent()-100)<1e-9,"physical_100_percent"))return;
+                    if (!require(gridFillsViewport(), "grid_fixed_after_zoom")) return;
+                    editor()->setProperty("gridDivisions", 0);
                     if(!capture("100-percent"))return;
                     // Interior canvas samples prove the texture is displaying
                     // this frame at one physical pixel per source pixel,
@@ -380,12 +383,15 @@ private:
                     // identity: pixel()'s rounding to 8 bits), so this stays
                     // exact.
                     if(!require(sourcePixelsExact(canvas_->paintColour()),"100_percent_source_pixels_exact"))return;
+                    editor()->setProperty("gridDivisions", 3);
                     canvas_->panBy(1e9,1e9);const auto edge=canvas_->imageRect();
                     canvas_->panBy(-1,-1);const auto back=canvas_->imageRect();
                     // At 100 % the image origin snaps to the physical pixel grid
                     // (FrameCanvas::imageRect), so at a fractional scale (150 %)
                     // a one-point pan moves it by a whole number of physical
                     // pixels: within one physical pixel of one point, never 0.
+                    if (!require(gridFillsViewport(), "grid_fixed_after_pan") || !capture("viewport-thirds")) return;
+                    editor()->setProperty("gridDivisions", 0);
                     const double slack=1.0/ratio+0.01;
                     const auto moved=[slack](double before,double after){const double d=before-after;return d>0.01&&std::abs(d-1)<slack;};
                     if(!require((edge.width()<=canvas_->width()||moved(edge.x(),back.x()))&&
@@ -818,6 +824,32 @@ private:
         if(!require(plot&&plot->isVisible()&&plot->width()==200&&plot->height()==56,"histogram_overlay_shown"))return;
         if(!capture("histogram"))return;
         checkZoom();
+    }
+    bool gridFillsViewport() const {
+        const auto* grid = window_.findChild<QQuickItem*>("alignmentGrid");
+        return grid && grid->isVisible() && grid->size() == canvas_->size() &&
+               grid->mapToScene(QPointF()) == canvas_->mapToScene(QPointF());
+    }
+    bool checkGridModes() {
+        auto* grid = window_.findChild<QQuickItem*>("alignmentGrid");
+        if (!require(grid && !grid->isVisible(), "grid_starts_off")) return false;
+        for (int divisions : {2, 3, 10}) {
+            editor()->setProperty("gridDivisions", divisions);
+            int lines = 0;
+            for (auto* item : grid->childItems()) {
+                if (!item->property("vertical").isValid()) continue;
+                const bool vertical = item->property("vertical").toBool();
+                const auto span = vertical ? grid->width() : grid->height();
+                const auto at = (vertical ? item->x() : item->y()) + 1;
+                const int line = lines % (divisions - 1) + 1;
+                if (!require(std::abs(at - std::round(span * line / divisions)) < 1,
+                             QStringLiteral("grid_line_%1_%2").arg(divisions).arg(lines))) return false;
+                ++lines;
+            }
+            if (!require(gridFillsViewport() && lines == 2*(divisions-1),
+                         QStringLiteral("viewport_grid_%1").arg(divisions))) return false;
+        }
+        return true;
     }
     void checkZoom() {
         const double ratio=window_.effectiveDevicePixelRatio();

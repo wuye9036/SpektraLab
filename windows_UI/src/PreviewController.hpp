@@ -107,6 +107,8 @@ class PreviewController final : public QObject {
     // The print list's selected row: "__scan_film__" while the film is
     // scanned (a slide, or No Print Profile), else the paper's id.
     Q_PROPERTY(QString printSelection READ printSelection NOTIFY settingsChanged)
+    Q_PROPERTY(bool edrAvailable READ edrAvailable NOTIFY settingsChanged)
+    Q_PROPERTY(bool lensCorrectionAvailable READ lensCorrectionAvailable NOTIFY settingsChanged)
     Q_PROPERTY(bool noPrintProfile READ noPrintProfile NOTIFY settingsChanged)
     Q_PROPERTY(bool canUseFilmPaper READ canUseFilmPaper NOTIFY settingsChanged)
     // The Camera section's AE Method pill (Params.swift AEMethod): "custom" is
@@ -387,6 +389,8 @@ public:
     bool filmIsMonochrome() const;
     QString printSelection() const;
     bool noPrintProfile() const;
+    bool edrAvailable() const;
+    bool lensCorrectionAvailable() const;
     bool canUseFilmPaper() const;
     QString aeMethod() const;
     QStringList aeMethodChoices() const;
@@ -571,6 +575,7 @@ public:
     // "white_balance_tint" and "white_balance"). False when refused: locked,
     // out of range (2000..50000 K, -150..150), an unknown preset, or a camera
     // with no matrix. Session.swift:2781-2814.
+    Q_INVOKABLE bool chooseLensProfile(const QUrl& file);
     Q_INVOKABLE bool setWhiteBalancePreset(const QString& id);
     Q_INVOKABLE bool setTemperature(double kelvin);
     Q_INVOKABLE bool setTint(double tint);

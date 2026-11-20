@@ -149,6 +149,32 @@ Item {
             enabled: false
         }
     }
+    Item {
+        id: guides
+        objectName: "alignmentGrid"
+        anchors.fill: parent
+        visible: preview.hasFrame && view.editor.gridDivisions > 0
+        enabled: false
+        Repeater {
+            model: guides.visible ? (view.editor.gridDivisions - 1) * 2 : 0
+            delegate: Rectangle {
+                required property int index
+                readonly property bool vertical: index < view.editor.gridDivisions - 1
+                readonly property real fraction: (vertical ? index + 1 : index + 2 - view.editor.gridDivisions) / view.editor.gridDivisions
+                x: vertical ? Math.round(fraction * guides.width) - 1 : 0
+                y: vertical ? 0 : Math.round(fraction * guides.height) - 1
+                width: vertical ? 3 : guides.width
+                height: vertical ? guides.height : 3
+                color: "#50000000"
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: parent.vertical ? 1 : parent.width
+                    height: parent.vertical ? parent.height : 1
+                    color: "#bbffffff"
+                }
+            }
+        }
+    }
     CropOverlay { canvas: frameCanvas; editor: view.editor }
     PairOverlay { canvas: frameCanvas; editor: view.editor }
     // The split's furniture: the line, the grip and the two labels. The line

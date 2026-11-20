@@ -53,7 +53,35 @@ const std::vector<WhiteBalancePreset>& white_balance_presets() {
     return presets;
 }
 
+// The imported LCP is resolved for this shot at selection time. Keep the
+// normalized radial coefficients in the edit so exports and a reopened photo
+// still use exactly that calibration if the original LCP is later moved.
+bool imported_lens_profile(const std::string& record, io::EmbeddedLens& lens) {
+    Json model;
+    std::string error;
+    if (record.size() > 4096 || !Json::parse(record, model, error) || model.at("name").as_string().empty()) return false;
+    const auto& k = model.at("radial").items();
+    const auto& centre = model.at("center").items();
+    if (k.size() != 3 || centre.size() != 2) return false;
+    for (const auto& v : k) if (!v.is_number() || !std::isfinite(v.as_double())) return false;
+    for (const auto& v : centre) if (!v.is_number() || !(v.as_double() >= 0 && v.as_double() <= 1)) return false;
+    io::EmbeddedLens parsed;
+    parsed.warp_center = {centre[0].as_double(), centre[1].as_double()};
+    auto& curve = parsed.scales[0];
+    curve.resize(1025);
+    for (size_t i = 0; i < curve.size(); ++i) {
+        const double r = double(i) / (curve.size()-1), q = r*r;
+        const double scale = 1 + q * (k[0].as_double() + q * (k[1].as_double() + q * k[2].as_double()));
+        if (!(scale > 0 && scale <= 32)) return false;
+        curve[i] = float(scale);
+    }
+    lens = std::move(parsed);
+    return true;
+}
+
 bool same_decode(const RenderSettings& a, const RenderSettings& b) {
+    if (a.get("lens_correction") != b.get("lens_correction")) return false;
+    if (std::get<bool>(a.get("lens_correction")) && a.get("lens_profile") != b.get("lens_profile")) return false;
     const WhiteBalance x = white_balance(a), y = white_balance(b);
     if (x.as_shot() || y.as_shot()) return x.as_shot() == y.as_shot();
     return x.temperature == y.temperature && x.tint == y.tint;
@@ -145,6 +173,19 @@ bool decode_raw(const std::filesystem::path& source, DecodeMode mode, const Rend
                                                  : io::decode_raw_compatible(source, user, out, error);
     // The header read is part of opening the file, and is reported as such.
     if (ok) {
+        if (std::get<bool>(settings.get("lens_correction"))) {
+            const auto start = std::chrono::steady_clock::now();
+            const auto record = std::get<std::string>(settings.get("lens_profile"));
+            io::EmbeddedLens imported;
+            if (!record.empty() && !imported_lens_profile(record, imported)) {
+                error = "Invalid saved lens profile";
+                return false;
+            }
+            io::apply_lens_profile(out, record.empty() ? out.metadata.lens_profile : imported);
+            const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            out.timings.convert_ms += ms;
+            out.timings.total_ms += ms;
+        }
         out.timings.open_ms += header_ms;
         out.timings.total_ms += header_ms;
     }

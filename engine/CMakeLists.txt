@@ -187,7 +187,7 @@ if(NOT APPLE)
 
         if(SPEKTRALAB_BUILD_NATIVE_RAW)
             include(cmake/LibRaw.cmake)
-            add_library(spk_image_io STATIC src/io/raw_decoder.cpp src/io/raw_headroom.cpp src/io/image_writer.cpp)
+            add_library(spk_image_io STATIC src/io/raw_decoder.cpp src/io/embedded_lens.cpp src/io/raw_headroom.cpp src/io/image_writer.cpp)
             target_compile_features(spk_image_io PUBLIC cxx_std_20)
             target_include_directories(spk_image_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
             target_link_libraries(spk_image_io PRIVATE spk_libraw)
