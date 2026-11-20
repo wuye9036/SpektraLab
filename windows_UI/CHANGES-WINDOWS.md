@@ -65,8 +65,8 @@ the next upstream effect ([engine/WINDOWS_FEATURE_COVERAGE.md](../engine/WINDOWS
 - **Shell**: the macOS editor's layout and design system in QML (Theme,
   icons, rail controls), one QML file per pane, an application menu, Settings
   and About windows, a preferences file.
-- **Interface text**: English, every string by key from `i18n/en.json`
-  through a JSON `Localizer`, with a language choice in Settings.
+- **Interface text**: English, Simplified Chinese, Japanese and Spanish,
+  loaded by key from JSON tables and selectable in Settings.
 - **Library**: Open Folder, flat files, Finder order, a kept per-folder
   order, crop-masked thumbnails from each file's own preview, click /
   Ctrl+click / arrows, and the Settings Clipboard with the Mac's seven groups.

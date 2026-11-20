@@ -796,9 +796,9 @@ deployed `licenses/` folder in a viewer, read from the files; a text the build
 should carry and lacks is listed as missing.
 
 **Interface text.** Every user-visible QML string, and the controller's status
-lines, is looked up by key from `i18n/en.json` through the C++ `Localizer`;
-English is the only shipped language, and [i18n/README.md](i18n/README.md)
-says how to add another.
+lines, is looked up by key through the C++ `Localizer`. Settings ▸ General ▸
+Language offers English, Simplified Chinese, Japanese and Spanish. See
+[i18n/README.md](i18n/README.md) to add another language.
 
 **Keys.** Ctrl+O imports files, Ctrl+Shift+O a folder, Ctrl+E opens export,
 Ctrl+A selects all photos, Ctrl+Shift+C / Ctrl+Shift+V copy and paste

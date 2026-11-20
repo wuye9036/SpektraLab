@@ -2,7 +2,7 @@
 
 首次核对日期：2026-10-04；状态更新：2026-10-16（MSVC 2022 构建，RTX 3070）。作者提供的 `sample_frontend_v4.pdf` 共一页；多数文字是矢量轮廓，以下内容来自渲染后的逐区辨认。浏览器打印日期、页码及文件地址不是应用界面内容。导出页另参考作者提供的 `export_page(1).ai` 的 PDF 兼容内容。
 
-首次核对时读取上游 main 的 **ab5e2d85e2ccef04266ca8ebb2f50af51a5c721c**；此后各项界面按 macOS 源码（`modern_UI/Spektrafilm/`，界面截图 `screenshots/Screenshot_English.png`）逐项移植，引用的 Swift 文件见 [README.md](README.md)。设计稿展示、上游源码实现和 Windows 可用功能分别记录，避免将画出的控件当成已可运行功能。界面文字现为英文（`i18n/en.json`，与 Mac 的 `Strings.swift` 用词一致），不再是首次核对时的中文。
+首次核对时读取上游 main 的 **ab5e2d85e2ccef04266ca8ebb2f50af51a5c721c**；此后各项界面按 macOS 源码（`modern_UI/Spektrafilm/`，界面截图 `screenshots/Screenshot_English.png`）逐项移植，引用的 Swift 文件见 [README.md](README.md)。设计稿展示、上游源码实现和 Windows 可用功能分别记录，避免将画出的控件当成已可运行功能。界面以 `i18n/en.json` 为英文源表，沿用 Mac 的 `Strings.swift` 用词，并提供简体中文、日语和西班牙语。
 
 ## 设计稿文字与模块
 

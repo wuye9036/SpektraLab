@@ -15,6 +15,7 @@ import SpektraLab.Native 1.0
 QtObject {
     // "en" by default; see Localizer.hpp for "system" and the loaded codes.
     readonly property string language: Localizer.language
+    readonly property string activeLanguage: Localizer.activeLanguage
     readonly property var availableLanguages: Localizer.availableLanguages
     function setLanguage(code) { Localizer.language = code }
 

@@ -70,7 +70,14 @@ QtObject {
     // Segoe UI ships with every Windows and has real Semibold/Bold faces,
     // which a variable face does not give the offscreen (file-database)
     // platform the self-test runs on.
-    readonly property string fontFamily: "Segoe UI"
+    // Segoe UI falls back per character for Chinese. In the Pre/Post-Dev
+    // tabs that can mix SimSun and MS UI Gothic within the same label.
+    // Follow the resolved language so the system setting and live switches
+    // use the same face as an explicit Chinese selection.
+    readonly property bool simplifiedChinese: L10n.activeLanguage === "zh-Hans"
+    readonly property Text yaheiProbe: Text { font.family: "Microsoft YaHei UI"; text: "Aa" }
+    readonly property string fontFamily: !simplifiedChinese ? "Segoe UI"
+        : yaheiProbe.fontInfo.family === "Microsoft YaHei UI" ? "Microsoft YaHei UI" : "Noto Sans SC"
     // System icon fonts, never bundled: Segoe Fluent Icons (Windows 11), else
     // Segoe MDL2 Assets (Windows 10), whose code points the glyphs in
     // Icons.qml share. Asked of the font matcher for the one family rather
@@ -92,7 +99,9 @@ QtObject {
     // titles take Bold and everything else Semibold, which reads at the same
     // weight beside a Mac capture.
     readonly property int weightTitle: Font.Bold
-    readonly property int weightText: Font.DemiBold
+    // YaHei UI has Regular and Bold, and Qt maps DemiBold to Bold. Keep
+    // small labels in Regular so the strokes stay distinct beside a title.
+    readonly property int weightText: simplifiedChinese ? Font.Normal : Font.DemiBold
 
     // --- metrics (Theme.swift Metric, in logical px) ---
     // The rail headers and the tool bar share one 38 px top row.

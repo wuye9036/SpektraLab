@@ -1,6 +1,6 @@
 // The shipped language tables, every key the QML asks for, and the Localizer's
 // rules: English fallback, placeholders, one warning per missing key, external
-// overrides and the switch signal. Arguments: the source i18n directory, the
+// overrides and the switch signal. Arguments: the bundled i18n directory, the
 // source qml directory and a scratch directory (inside the build tree) for the
 // test's own language files. Needs neither a GPU nor a QML engine.
 #include "Localizer.hpp"
@@ -35,6 +35,12 @@ int warningsAbout(const QString& text) {
     for(const auto& message:l10nWarnings)count+=message.contains(text)?1:0;
     return count;
 }
+QSet<QString> placeholders(const QString& text) {
+    static const QRegularExpression pattern(QStringLiteral("\\{[0-9]+\\}"));
+    QSet<QString> result;
+    for(auto it=pattern.globalMatch(text);it.hasNext();)result.insert(it.next().captured());
+    return result;
+}
 } // namespace
 
 int main(int argc,char** argv) {
@@ -50,7 +56,25 @@ int main(int argc,char** argv) {
         check(localizer.language()=="en"&&localizer.activeLanguage()=="en","English is not the default");
         const auto english=localizer.keys("en");
         check(english.size()>50,"en.json is missing or nearly empty");
-        for(const auto& key:english)check(!localizer.translate(key).isEmpty(),"an English text is empty");
+        QHash<QString,QSet<QString>> englishPlaceholders;
+        for(const auto& key:english) {
+            const auto value=localizer.translate(key);
+            check(!value.isEmpty(),"an English text is empty");
+            englishPlaceholders.insert(key,placeholders(value));
+        }
+        for(const auto code:{"zh-Hans","ja","es"}) {
+            check(localizer.keys(code)==english,"a required language is missing or incomplete");
+            localizer.setLanguage(code);
+            check(localizer.activeLanguage()==code&&localizer.translate("settings.language")!="Language",
+                  "switching to a shipped language did not translate the settings");
+            for(const auto& key:english) {
+                if(placeholders(localizer.translate(key))!=englishPlaceholders.value(key)) {
+                    std::fprintf(stderr,"placeholder mismatch in %s: %s\n",code,qPrintable(key));
+                    throw std::runtime_error("translated placeholders differ");
+                }
+            }
+        }
+        localizer.setLanguage("en");
         for(const auto& language:localizer.availableLanguages())
             check(localizer.unknownKeys(language.toMap().value("code").toString()).isEmpty(),"a shipped table has keys en.json lacks");
 
@@ -112,9 +136,13 @@ int main(int argc,char** argv) {
         check(localizer.loadDirectory(scratch+"/extra")==1,"test language not loaded, or a broken file accepted");
         check(warningsAbout("broken.json")==1,"a malformed table is not reported");
         const auto languages=localizer.availableLanguages();
-        auto field=[&](int index,const char* name) {return languages[index].toMap().value(QLatin1String(name)).toString();};
-        check(languages.size()==2&&field(0,"code")=="en"&&field(1,"code")=="xx-Test"&&
-              field(1,"name")=="Testish"&&field(1,"englishName")=="Test language","available languages");
+        QHash<QString,QVariantMap> byCode;
+        for(const auto& language:languages) {
+            const auto entry=language.toMap();
+            byCode.insert(entry.value("code").toString(),entry);
+        }
+        check(languages.first().toMap().value("code")=="en"&&byCode.value("xx-Test").value("name")=="Testish"&&
+              byCode.value("xx-Test").value("englishName")=="Test language","available languages");
         check(localizer.unknownKeys("xx-Test")==QStringList{"no.such.english"},"a stray key is not found");
         int languageSignals=0,revisionSignals=0;
         QObject::connect(&localizer,&Localizer::languageChanged,[&]{++languageSignals;});
@@ -137,7 +165,7 @@ int main(int argc,char** argv) {
         check(languageSignals==2&&revisionSignals==2&&localizer.translate("film.title")=="Film","switching back");
         // "system" is allowed, never automatic, and resolves to a table we have.
         localizer.setLanguage("system");
-        check(localizer.language()=="system"&&(localizer.activeLanguage()=="en"||localizer.activeLanguage()=="xx-Test"),
+        check(localizer.language()=="system"&&byCode.contains(localizer.activeLanguage()),
               "system resolves to a loaded language");
         localizer.setLanguage("en");
 

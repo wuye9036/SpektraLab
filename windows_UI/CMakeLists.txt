@@ -97,7 +97,8 @@ spk_qt_add_canvas_shaders(SpektraLabQt)
 target_sources(SpektraLabQt PRIVATE
     src/DisplayColor.hpp src/DisplayColor.cpp src/ColorLut.hpp src/ColorLut.cpp)
 # The compiled-in language tables, read from :/i18n (i18n/README.md).
-qt_add_resources(SpektraLabQt "spektralab_i18n" PREFIX "/i18n" BASE i18n FILES i18n/en.json)
+set(spektralab_languages i18n/en.json i18n/zh-Hans.json i18n/ja.json i18n/es.json)
+qt_add_resources(SpektraLabQt "spektralab_i18n" PREFIX "/i18n" BASE i18n FILES ${spektralab_languages})
 set_source_files_properties(qml/Theme.qml qml/L10n.qml qml/Icons.qml qml/SectionStates.qml qml/Catalog.qml
     PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 # One module; the subdirectories are ownership, not namespaces -- every type is
@@ -263,8 +264,9 @@ if(BUILD_TESTING)
     target_include_directories(spk_qt_localizer_test PRIVATE src)
     target_compile_features(spk_qt_localizer_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_localizer_test PRIVATE Qt6::Core)
+    qt_add_resources(spk_qt_localizer_test "spektralab_i18n_test" PREFIX "/i18n" BASE i18n FILES ${spektralab_languages})
     add_test(NAME spk_qt_localizer COMMAND spk_qt_localizer_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/i18n" "${CMAKE_CURRENT_SOURCE_DIR}/qml" "${CMAKE_CURRENT_BINARY_DIR}/localizer_test")
+        ":/i18n" "${CMAKE_CURRENT_SOURCE_DIR}/qml" "${CMAKE_CURRENT_BINARY_DIR}/localizer_test")
     if(WIN32)
         # Specify each test's DLL search path: CTest on this Windows host can
         # restore the pre-launch PATH between tests. Ambient PATH alone makes

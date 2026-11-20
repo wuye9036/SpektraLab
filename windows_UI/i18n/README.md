@@ -1,9 +1,8 @@
 # Interface text
 
 Every user-visible string in the Windows editor's QML is looked up by key in
-a JSON table, one file per language. The application ships English only
-(`en.json`); the tables, the lookup and the switch are in place so another
-language is a file, not a code change.
+a JSON table, one file per language. The application ships English (`en.json`),
+Simplified Chinese (`zh-Hans.json`), Japanese (`ja.json`) and Spanish (`es.json`).
 
 ## How it fits together
 
@@ -45,7 +44,7 @@ language is a file, not a code change.
 
 - `language` is the code (BCP 47: `de`, `pt-BR`, `zh-Hans`). The file name
   is used only when the header has none.
-- `name` is the language's name in that language, for a future language menu
+- `name` is the language's name in that language, for the language menu
   (its reader may not read the current language); `englishName` is for
   everyone else.
 - `strings` is a flat map of key to text. UTF-8, no comments (JSON has none).
@@ -79,10 +78,11 @@ translation; numbers arrive already formatted (`"2.31"`, not `2.3071`).
    A key you leave out, or leave empty, shows the English.
 2. To try it without rebuilding, put the file in `i18n\` beside
    `SpektraLabQt.exe` and choose it in Settings ▸ General. To ship
-   it, add it to the `qt_add_resources(... spektralab_i18n ...)` list in
+   it, add it to the `spektralab_languages` list in
    `windows_UI/CMakeLists.txt`.
-3. Run CTest: `spk_qt_localizer` checks that every shipped table only uses
-   keys `en.json` defines and that every key the QML asks for exists. At run
+3. Run CTest: `spk_qt_localizer` checks the bundled Chinese, Japanese and
+   Spanish tables against the English keys and placeholders. It also checks
+   that each QML key exists in English. At run
    time a key a table has but English lacks is logged at start
    (`spektralab.l10n`), and a key English lacks is logged once and shown as
    the key itself.

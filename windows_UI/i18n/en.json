@@ -44,7 +44,7 @@
         "settings.tab.agents": "Agents",
         "settings.language": "Language",
         "settings.languageFollowSystem": "Follow the system",
-        "settings.languageCaption": "Film, paper, camera and lens names stay in English, as do technical abbreviations. The change applies immediately \u2014 nothing needs restarting. This build ships English; a language file in the i18n folder beside the app appears here.",
+        "settings.languageCaption": "Film, paper, camera and lens names stay in English, as do technical abbreviations. The change applies immediately. You can add languages by placing a language file in the i18n folder beside the app.",
         "settings.interface": "Interface",
         "settings.scale": "Scale",
         "settings.scaleCaption": "Scales the whole interface \u2014 the editor, Settings and About. Windows applies it the next time SpektraLab starts; this session runs at {0} %.",
