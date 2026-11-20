@@ -820,8 +820,11 @@ private:
         std::lock_guard<std::mutex> lock(buffers_mutex_);
         if (!persistent) {
             Buffer* best = nullptr;
+            // A few shader constants must not pin a free image plane through a dispatch.
+            constexpr size_t parameter_limit = 4096;
             for (Buffer* b : buffers_)
                 if (!b->persistent && b->refs == 0 && b->bytes >= bytes &&
+                    (bytes > parameter_limit || b->bytes <= parameter_limit) &&
                     (!best || b->bytes < best->bytes)) best = b;
             if (best) {
                 best->refs = 1;

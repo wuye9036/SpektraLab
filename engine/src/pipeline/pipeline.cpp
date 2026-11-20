@@ -1219,7 +1219,7 @@ bool Pipeline::node_film_curves(const Image& in, Image& out, std::string& error)
                         baked_.film_curve_k, out, error);
 }
 
-bool Pipeline::node_dir_couplers(const Image& cmy, const Image& log_raw, Image& out,
+bool Pipeline::node_dir_couplers(Image& cmy, Image& log_raw, Image& out,
                                  std::string& error) {
     const DirCouplersParams& dcp = params_.film_render.dir_couplers;
     if (!dcp.active) { out = cmy; return true; }
@@ -1235,6 +1235,7 @@ bool Pipeline::node_dir_couplers(const Image& cmy, const Image& log_raw, Image& 
                          gpu::Arg::buf(corr.buf)},
                         cmy.pixels(), error)) return false;
 
+    cmy.buf.reset();  // Only the correction and log exposure feed diffusion.
     const std::vector<Blur::Component> diffusion = dir_coupler_diffusion();
     if (!diffusion.empty()) {
         Image diffused;
@@ -1247,6 +1248,8 @@ bool Pipeline::node_dir_couplers(const Image& cmy, const Image& log_raw, Image& 
     fill3(b, -1.0);
     Image log_raw_0;
     if (!blur_.lincomb(log_raw, corr, a, b, log_raw_0, error)) return false;
+    log_raw.buf.reset();
+    corr.buf.reset();
     return curve_interp(log_raw_0, baked_.coupler_curve_x, baked_.coupler_curve_inv,
                         baked_.coupler_curve_y, baked_.film_curve_k, out, error);
 }
@@ -1843,7 +1846,7 @@ bool Pipeline::film_prefix(const Image& in, const FrameShape& frame, Image& cur,
 // between a band run and a whole-frame stage has to copy **every live field**,
 // not just `cur`. That is a real finding from writing this out rather than a
 // complication invented here, and step 6 inherits it.
-bool Pipeline::film_scale_and_expose(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::film_scale_and_expose(Chain& in, Chain& out, std::string& error) {
     Image cur = in.cur, next;
     // RFC-023 sits here, before `upsample`: a scalar gain commutes with the
     // spectral reconstruction exactly (§12.2), and this is the band-able
@@ -1856,7 +1859,7 @@ bool Pipeline::film_scale_and_expose(const Chain& in, Chain& out, std::string& e
     return true;
 }
 
-bool Pipeline::film_boost(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::film_boost(Chain& in, Chain& out, std::string& error) {
     // **`node_boost` is a stage of its own, and it is not a detail.** It
     // normalises the highlight lift by `device_max(in)` -- the *frame's* own
     // maximum, a reduction over every pixel -- so it is not a pointwise node
@@ -1885,7 +1888,7 @@ bool Pipeline::film_boost(const Chain& in, Chain& out, std::string& error) {
     return true;
 }
 
-bool Pipeline::film_overscan(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::film_overscan(Chain& in, Chain& out, std::string& error) {
     // RFC-032 §27: whole-frame, and after `boost` for the same reason `boost`
     // is its own stage -- metering and the highlight lift are statistics of
     // the *frame*, so they are taken before the canvas exists.
@@ -1896,7 +1899,7 @@ bool Pipeline::film_overscan(const Chain& in, Chain& out, std::string& error) {
     return true;
 }
 
-bool Pipeline::film_blurs(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::film_blurs(Chain& in, Chain& out, std::string& error) {
     // Class F, resolved per run: `lens_blur` is one sigma on three channels,
     // halation's two mixtures are where a channel can straddle the crossover,
     // and a `carried` demand sends the whole stage back to whole-frame.
@@ -1908,7 +1911,7 @@ bool Pipeline::film_blurs(const Chain& in, Chain& out, std::string& error) {
     return true;
 }
 
-bool Pipeline::film_log_and_curves(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::film_log_and_curves(Chain& in, Chain& out, std::string& error) {
     // Produces both of the chain's intermediates: the log-exposed frame and
     // the developed curve output. `log_e_film` is read twice downstream.
     Image next;
@@ -1921,7 +1924,7 @@ bool Pipeline::film_log_and_curves(const Chain& in, Chain& out, std::string& err
     return true;
 }
 
-bool Pipeline::film_couplers(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::film_couplers(Chain& in, Chain& out, std::string& error) {
     Image next;
     SPK_NODE(node_dir_couplers(in.cur, in.log_e_film, next, error));
     out = in;
@@ -1929,7 +1932,7 @@ bool Pipeline::film_couplers(const Chain& in, Chain& out, std::string& error) {
     return true;
 }
 
-bool Pipeline::film_grain(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::film_grain(Chain& in, Chain& out, std::string& error) {
     // Step 5: whole-frame. Its body holds its own dye-cloud blurs, so it is
     // I + F/R and cannot be split by a stage boundary -- grain comes back in
     // step 6 with F and R. See the §9 note in the commit.
@@ -1938,7 +1941,7 @@ bool Pipeline::film_grain(const Chain& in, Chain& out, std::string& error) {
     return true;
 }
 
-bool Pipeline::print_spectral(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::print_spectral(Chain& in, Chain& out, std::string& error) {
     Image cur = in.cur, next;
     // RFC-032 §27 before RFC-028: where there is no film the DI encodes the
     // hole's density, not the frame's. `node_overscan_light` (the scan's view
@@ -1964,13 +1967,13 @@ bool Pipeline::print_spectral(const Chain& in, Chain& out, std::string& error) {
     return true;
 }
 
-bool Pipeline::print_glare(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::print_glare(Chain& in, Chain& out, std::string& error) {
     SPK_NODE(node_glare(in.cur, out.cur, error));
     out.log_e_film = Image{};
     return true;
 }
 
-bool Pipeline::print_linear(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::print_linear(Chain& in, Chain& out, std::string& error) {
     if (di_active_) { out = in; return true; }   // the DI is already its own encoded output
     Image cur = in.cur, next;
     SPK_NODE(node_xyz_to_rgb(cur, next, error)); cur = next;
@@ -1980,7 +1983,7 @@ bool Pipeline::print_linear(const Chain& in, Chain& out, std::string& error) {
     return true;
 }
 
-bool Pipeline::print_scan_finish(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::print_scan_finish(Chain& in, Chain& out, std::string& error) {
     if (di_active_) { out = in; return true; }   // the DI is already its own encoded output
     Image cur = in.cur, next;
     SPK_NODE(node_scanner_blur(cur, next, error)); cur = next;
@@ -1997,7 +2000,7 @@ bool Pipeline::print_scan_finish(const Chain& in, Chain& out, std::string& error
     return true;
 }
 
-bool Pipeline::print_output(const Chain& in, Chain& out, std::string& error) {
+bool Pipeline::print_output(Chain& in, Chain& out, std::string& error) {
     if (di_active_) { out = in; return true; }   // the DI is already its own encoded output
     // Calibrations observe the completed linear print scan. Apply EDR after
     // spatial scanner corrections so those stages cannot bend its joins or
@@ -2044,11 +2047,9 @@ const char* Pipeline::class_name(StageClass klass) {
 }
 const size_t Pipeline::kPrintStageCount = sizeof(kPrintStages) / sizeof(kPrintStages[0]);
 
-bool Pipeline::film_segment(const Image& in, Image& out, std::string& error) {
+bool Pipeline::film_segment(Chain& cur, Image& out, std::string& error) {
     // The straight-line chain, unchanged in every node and in every order; the
     // stages are the same calls grouped at the class boundaries.
-    Chain cur;
-    cur.cur = in;
     for (size_t i = 0; i < kFilmStageCount; ++i) {
         Chain next;
         if (!(this->*kFilmStages[i].run)(cur, next, error)) return false;
@@ -2090,9 +2091,9 @@ bool Pipeline::run_film(const Image& in, Image& out, Progress* progress, std::st
     if (progress_) { progress_->total_nodes = node_count_; progress_->fired = 0; }
     last_ae_ev_.reset();
 
-    Image cur;
-    if (!film_prefix(in, FrameShape{in.h, in.w}, cur, error)) return false;
-    if (!film_segment(cur, out, error)) return false;
+    Chain chain;
+    if (!film_prefix(in, FrameShape{in.h, in.w}, chain.cur, error)) return false;
+    if (!film_segment(chain, out, error)) return false;
     progress_ = nullptr;
     return true;
 }
@@ -2160,12 +2161,11 @@ bool Pipeline::run_stages_striped(const Stage* stages, size_t count, Chain& chai
             Chain plane_out;
             for (const StripSpan& span : plan) {
                 BandRead read;
-                Chain band_in;
-                if (!band_from(chain.cur, span, halo, read, band_in.cur, error)) return false;
+                Chain cur;
+                if (!band_from(chain.cur, span, halo, read, cur.cur, error)) return false;
                 if (chain.log_e_film.buf &&
-                    !band_from(chain.log_e_film, span, halo, read, band_in.log_e_film, error)) return false;
+                    !band_from(chain.log_e_film, span, halo, read, cur.log_e_film, error)) return false;
 
-                Chain cur = band_in;
                 band_row0_ = read.y0;
                 strip_plane_h_ = frame_h;
                 for (size_t k = i; k < j; ++k) {
@@ -2294,14 +2294,11 @@ bool Pipeline::run_film_striped(const Image& in, Image& out, Progress* progress,
     if (progress_) { progress_->total_nodes = node_count_; progress_->fired = 0; }
     last_ae_ev_.reset();
 
-    Image cur;
-    if (!film_prefix(in, FrameShape{in.h, in.w}, cur, error)) return false;
-
     Chain chain;
-    chain.cur = cur;
+    if (!film_prefix(in, FrameShape{in.h, in.w}, chain.cur, error)) return false;
     Progress::StripRun report;
     report.stage = "film";
-    report.plan = strip_plan(cur.h);
+    report.plan = strip_plan(chain.cur.h);
     if (!run_stages_striped(kFilmStages, kFilmStageCount, chain, report.plan, report, error)) {
         return false;
     }

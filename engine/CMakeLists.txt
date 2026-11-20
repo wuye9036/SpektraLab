@@ -314,6 +314,14 @@ if(NOT APPLE)
                     COMMAND spk_vulkan_${probe} "${vulkan_resource_dir}")
             endforeach()
 
+            if(WIN32)
+                add_executable(spk_vulkan_blur_mixture tests/gpu_vulkan_blur_mixture.cpp)
+                target_include_directories(spk_vulkan_blur_mixture PRIVATE src src/core)
+                target_link_libraries(spk_vulkan_blur_mixture PRIVATE spektralab_engine)
+                add_dependencies(spk_vulkan_blur_mixture spektralab_vulkan_resources)
+                add_test(NAME spk_vulkan_blur_mixture COMMAND spk_vulkan_blur_mixture "${vulkan_resource_dir}")
+            endif()
+
             # The portable imprint raster, CPU only; it reads the staged fonts.
             add_executable(spk_edge_raster tests/edge_raster_test.cpp)
             target_include_directories(spk_edge_raster PRIVATE
