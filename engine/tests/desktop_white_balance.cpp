@@ -181,6 +181,18 @@ void neutral_picker() {
     // The camera's own white balance reads back as the illuminant it was set
     // for: As Shot -> custom at the same numbers is the same picture.
     metadata.camera_whitebalance = {shot[0] * 2.0f, shot[1] * 2.0f, shot[2] * 2.0f, shot[1] * 2.0f};
+    spk::io::DecodedRaw sample;
+    sample.metadata = metadata;
+    sample.metadata.camera_raw = true;
+    sample.width = sample.height = 1;
+    for (double v : off) sample.rgb.push_back(float(v * 0.18 / lo));
+    const auto balanced = camera.multipliers(3400, 12);
+    const auto expected = camera.decode(card, balanced);
+    const auto minGain = *std::min_element(balanced.begin(), balanced.end());
+    check(preview_white_balance(sample, {"custom", 3400, 12}), "valid camera rejected for WB preview");
+    for (int c = 0; c < 3; ++c)
+        check(std::abs(sample.rgb[c] - expected[c] * 0.18 / minGain) < 1e-5,
+              "preview gains do not match a fresh camera-space decode on an unclipped patch");
     double as_shot_k = 0, as_shot_tint = 0;
     check(as_shot_white_balance(metadata, as_shot_k, as_shot_tint) && std::abs(as_shot_k - 5200.0) < 1.0 &&
               std::abs(as_shot_tint) < 0.05, "As Shot does not read back the camera's illuminant");
@@ -227,7 +239,9 @@ void sampler() {
 // else does; As Shot restores the camera's multipliers exactly; and a picked
 // point of the decoded frame is grey after the pick's own re-decode.
 void raw_file(const std::filesystem::path& resources, const std::filesystem::path& raw) {
-    PreviewHost host(resources);
+    HostOptions options;
+    options.preview_long_edge = 1280;
+    PreviewHost host(resources, options);
     RenderSettings settings;
     settings.grain_active = false;
     const FramePtr shot = host.open_raw(raw, DecodeMode::compatible16, settings);
@@ -238,6 +252,10 @@ void raw_file(const std::filesystem::path& resources, const std::filesystem::pat
 
     RenderSettings warm = settings;
     set_white_balance(warm, {"custom", 3200.0, 0.0});
+    const auto draft = host.render(warm, {}, Tier::white_balance_preview);
+    check(draft->white_balance_draft && !draft->full_tier && host.current() == shot &&
+          draft->logicalWidth() == shot->width() && draft->logicalHeight() == shot->height(),
+          "white-balance drag replaced the exact decode or changed the canvas dimensions");
     const FramePtr tungsten = host.render(warm);
     check(!tungsten->reprint() && !tungsten->negative_was_cached() && tungsten->timings.decode_ms > 0,
           "a white balance did not re-decode and develop a new negative");
@@ -278,6 +296,9 @@ void raw_file(const std::filesystem::path& resources, const std::filesystem::pat
     // that decode's own captured matrix: the same point picks the same
     // illuminant through either decode.
     const FramePtr room = host.open_raw(raw, DecodeMode::headroom, picked);
+    const auto roomDraft = host.render(warm, {}, Tier::white_balance_preview);
+    check(roomDraft->white_balance_draft && roomDraft->metadata.headroom_enabled && host.current() == room,
+          "headroom drag lost the headroom decode");
     const auto& pre = room->metadata.post_scale_pre_mul;
     check(room->metadata.headroom_enabled && std::max({pre[0], pre[1], pre[2]}) == 1.0f,
           "a custom white balance under headroom is not max-normalised");

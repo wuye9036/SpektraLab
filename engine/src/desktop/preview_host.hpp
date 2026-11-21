@@ -491,6 +491,7 @@ public:
     // size scaled by the picture's own reduction for a live one -- so the
     // canvas can keep its magnification when the full frame replaces it.
     bool full_tier = true;
+    bool white_balance_draft = false; // provisional colour, never a full RAW decode
     std::uint32_t logical_width = 0, logical_height = 0;
 
     const spk_result& pixels() const;
@@ -554,7 +555,9 @@ struct HostOptions {
 // 400 ms after the last edit). Tier::live is Tier::full when the host has no
 // live tier, and a live frame of a picture no larger than the preview is
 // already full resolution (Frame::full_tier).
-enum class Tier { live, full };
+// A white-balance preview may return a detached, approximate frame while
+// current() retains the exact input for the next edit or full render.
+enum class Tier { live, full, white_balance_preview };
 
 // Thrown by a render the user's next edit cancelled (PreviewHost::
 // cancel_full_render): no failure, and the session is kept as it was.

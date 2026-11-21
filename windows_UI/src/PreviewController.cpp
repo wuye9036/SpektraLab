@@ -358,7 +358,7 @@ void PreviewController::workerLoop(std::filesystem::path resources,desktop::Host
         auto reply = job(*host);
         const bool render = reply.operation == "render";
         const auto revision = reply.settings_revision;
-        const bool transient = reply.cancelled || (reply.drag_id && reply.frame && !reply.frame->full_tier);
+        const bool transient = reply.cancelled || (reply.frame && (reply.frame->white_balance_draft || (reply.drag_id && !reply.frame->full_tier)));
         deliver(std::move(reply));
         if (!render || (!transient && revision == settings_revision_.load()))
             analyse(*host);
@@ -383,6 +383,7 @@ desktop::FramePtr PreviewController::fullFrame(desktop::PreviewHost& host,const 
 // pair, whose pieces render whole (PreviewControllerPairs.cpp).
 void PreviewController::scheduleFullRender() {
     if(!live_development_||!frame_||frame_->full_tier||frame_->pair||busy_||dialog_open_||dirty()){full_timer_.stop();return;}
+    if (drag_id_ && frame_->white_balance_draft && !original_wanted_) { full_timer_.stop(); return; }
     if (drag_id_) {
         // A stationary pointer can refine even before the button comes up.
         full_timer_.start(int(std::max<qint64>(0, 220 - last_edit_.elapsed())));
@@ -398,14 +399,26 @@ void PreviewController::renderFull() {
     submit([this,s,shown,gen,revision,factory,geometry](auto& host){Reply r;r.generation=gen;r.settings_revision=revision;r.operation="render";r.geometry=geometry;
         try {
             const auto active=host.current();
-            // Only on the session that made the live frame; anything else is
-            // a newer state the next edit's render reconciles.
+            // Refine only while the worker still holds this photograph.
             if(!active||active->source!=shown->source||active->decode_mode!=shown->decode_mode)
                 throw desktop::RenderCancelled();
-            r.frame=host.render(s,shown->geometry,desktop::Tier::full);
+            // Replace the draft with the exact RAW live frame first, as on
+            // an ordinary open. Its full tier follows on the same session.
+            const auto tier=shown->white_balance_draft?desktop::Tier::live:desktop::Tier::full;
+            r.frame=host.render(s,shown->geometry,tier);
             if(settings_revision_.load()==revision)r.publication=publish(factory,r.frame,geometry);
         }catch(const desktop::RenderCancelled&){r.frame=nullptr;r.cancelled=true;}
-        catch(const std::exception& e){r.frame=nullptr;r.error=text(e.what());}return r;},uiText("status.renderingFull"),"render");
+        catch(const std::exception& e){
+            r.frame=nullptr;r.error=text(e.what());
+            // A draft never replaces the worker's exact decode. If refinement
+            // failed, restore the usable frame rather than leaving a draft saved.
+            const auto exact=host.current();
+            if(shown->white_balance_draft && exact && exact->source==shown->source &&
+               exact->decode_mode==shown->decode_mode && !exact->white_balance_draft) {
+                try { r.publication=publish(factory,exact,geometry);r.frame=exact; }
+                catch(const std::exception&) {} // preserve the original diagnostic
+            }
+        }return r;},uiText("status.renderingFull"),"render");
 }
 void PreviewController::requestVisible(VisibleJob make,VisibleTake take) {
     visible_next_=VisibleRequest{++visible_request_,std::move(make),std::move(take)};
@@ -499,7 +512,8 @@ void PreviewController::accept(Reply reply) {
     const bool intermediate = dragging && reply.frame && dirty();
     const bool superseded = reply.operation == "render" &&
         (reply.cancelled || (reply.settings_revision != settings_revision_ && !intermediate));
-    busy_=false;active_operation_.clear();failed_=!superseded&&!reply.error.isEmpty();
+    const bool recovered = reply.operation=="render" && reply.frame && !reply.error.isEmpty() && !superseded;
+    busy_=false;active_operation_.clear();failed_=!superseded&&!recovered&&!reply.error.isEmpty();
     // The photograph opened, or failed to: the placeholder fades out.
     if(reply.operation=="open")dismissPlaceholder();
     if(superseded) {
@@ -584,6 +598,7 @@ void PreviewController::accept(Reply reply) {
         }
     } else if(reply.operation=="export") status_=uiText("status.exported");
     else if(reply.operation=="batch-export")status_=reply.message;
+    if(recovered){failed_=true;status_=reply.error;}
     if(failed_&&reply.operation=="open"&&reply.library_index>=0&&reply.library_index<int(library_.size()))
         library_[reply.library_index].error=status_;
     if(failed_&&reply.operation!="export"&&reply.operation!="batch-export"&&active_index_>=0){
@@ -602,7 +617,7 @@ void PreviewController::accept(Reply reply) {
     // began still needs applying, including after an overwrite refusal.
     if((dragging||superseded||reply.operation=="export"||reply.operation=="batch-export")&&!busy_)schedulePreview();
     // A live frame on screen and nothing left to apply: its full frame next.
-    scheduleFullRender();
+    if(!failed_)scheduleFullRender();
 }
 desktop::RenderSettings PreviewController::settings() const {
     desktop::RenderSettings s=extra_settings_;
@@ -696,7 +711,8 @@ QVariantMap PreviewController::metadata() const {
 void PreviewController::setOriginalWanted(bool wanted) {
     if(wanted==original_wanted_)return;
     original_wanted_=wanted;
-    if(wanted&&original_.isNull()&&!original_pending_)requestOriginal();
+    if(wanted && frame_ && frame_->white_balance_draft) scheduleFullRender();
+    else if(wanted&&original_.isNull()&&!original_pending_)requestOriginal();
     emit originalChanged();
 }
 void PreviewController::refreshOriginal(bool decodeChanged) {
@@ -728,7 +744,9 @@ QRectF PreviewController::cutPictureRect() const {
     if(quad.size()==8){cx=cy=0;for(int i=0;i<4;++i){cx+=quad[2*i].toDouble()*sw/4;cy+=quad[2*i+1].toDouble()*sh/4;}}
     const double pw=frame_->picture_width,ph=frame_->picture_height;
     return QRectF(std::round(cx-pw/2),std::round(cy-ph/2),pw,ph);
-}void PreviewController::requestOriginal() {
+}
+void PreviewController::requestOriginal() {
+    if(frame_ && frame_->white_balance_draft) return; // the exact decode will request it on publication
     if(!frame_)return;
     const auto token=++original_token_;original_pending_=true;original_error_.clear();
     const auto whole=original_full_;const auto geometry=geometry_;const auto encoding=frame_->encoding;
@@ -1023,17 +1041,17 @@ void PreviewController::apply() {
     const auto drag = drag_id_;
     const bool released = released_revision_ && released_revision_ == revision;
     const bool live = live_development_;
-    submit([this,s,shown,gen,revision,mode,factory,geometry,cut,live,released,drag](auto& host){Reply r;r.generation=gen;r.settings_revision=revision;r.drag_id=drag;r.operation="render";r.geometry=geometry;
+    const bool allowBalancePreview = live && !original_wanted_;
+    submit([this,s,shown,gen,revision,mode,factory,geometry,cut,live,released,drag,allowBalancePreview](auto& host){Reply r;r.generation=gen;r.settings_revision=revision;r.drag_id=drag;r.operation="render";r.geometry=geometry;
         try {
             // Publication can fail after a successful worker open (for example,
             // a display allocation failure). Reconcile against the image the
             // user is actually editing before reusing the worker's session.
             const auto active=host.current();
             const bool sameSession=active&&active->source==shown->source&&active->decode_mode==mode;
-            // A RAW white balance opens a replacement session. Publish its live
-            // frame first so the old session retires before full-size development.
             const bool needsDecode=!sameSession||!desktop::same_decode(active->settings,s);
-            const auto tier=live&&(!released||needsDecode)?desktop::Tier::live:desktop::Tier::full;
+            auto tier=live&&(!released||needsDecode)?desktop::Tier::live:desktop::Tier::full;
+            if(allowBalancePreview && sameSession && needsDecode) tier=desktop::Tier::white_balance_preview;
             r.frame=sameSession?host.render(s,cut,tier):host.open_raw(shown->source,mode,s,cut,tier);
             // accept() drops a superseded result unseen; converting 33 MP
             // for it would only delay the render that replaces it.

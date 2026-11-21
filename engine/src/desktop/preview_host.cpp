@@ -555,23 +555,19 @@ std::vector<float> cut_decode(const io::DecodedRaw& in, const EngineCut& g, std:
     return out;
 }
 
-// The whole decode undeveloped, for framing in the gate: box-downsampled to
-// at most the configured preview long edge, linear ProPhoto (D50) to sRGB (D65, Bradford),
-// its mean luminance placed at 18 %, sRGB encoded. Only a guide to frame
-// with; the print is the engine's.
-std::shared_ptr<const Frame::SourcePreview> source_preview(const io::DecodedRaw& in, std::uint32_t edge) {
-    auto preview = std::make_shared<Frame::SourcePreview>();
+io::DecodedRaw reduced_decode(const io::DecodedRaw& in, std::uint32_t edge) {
+    io::DecodedRaw out;
+    out.metadata = in.metadata;
     const double scale = std::min(1.0, double(edge) / std::max(in.width, in.height));
-    preview->width = std::max(1u, std::uint32_t(std::lround(in.width * scale)));
-    preview->height = std::max(1u, std::uint32_t(std::lround(in.height * scale)));
-    std::vector<float> linear(std::size_t(preview->width) * preview->height * 3);
-    double mean = 0.0;
-    for (std::uint32_t y = 0; y < preview->height; ++y) {
-        const auto y0 = std::uint64_t(y) * in.height / preview->height;
-        const auto y1 = std::uint64_t(y + 1) * in.height / preview->height;
-        for (std::uint32_t x = 0; x < preview->width; ++x) {
-            const auto x0 = std::uint64_t(x) * in.width / preview->width;
-            const auto x1 = std::uint64_t(x + 1) * in.width / preview->width;
+    out.width = std::max(1u, std::uint32_t(std::lround(in.width * scale)));
+    out.height = std::max(1u, std::uint32_t(std::lround(in.height * scale)));
+    out.rgb.resize(std::size_t(out.width) * out.height * 3);
+    for (std::uint32_t y = 0; y < out.height; ++y) {
+        const auto y0 = std::uint64_t(y) * in.height / out.height;
+        const auto y1 = std::uint64_t(y + 1) * in.height / out.height;
+        for (std::uint32_t x = 0; x < out.width; ++x) {
+            const auto x0 = std::uint64_t(x) * in.width / out.width;
+            const auto x1 = std::uint64_t(x + 1) * in.width / out.width;
             double sum[3] = {};
             for (auto sy = y0; sy < y1; ++sy) {
                 const float* pixel = in.rgb.data() + (sy * in.width + x0) * 3;
@@ -579,11 +575,26 @@ std::shared_ptr<const Frame::SourcePreview> source_preview(const io::DecodedRaw&
                     for (int c = 0; c < 3; ++c) sum[c] += pixel[c];
             }
             const double count = double((y1 - y0) * (x1 - x0));
-            float* p = linear.data() + (std::size_t(y) * preview->width + x) * 3;
+            float* p = out.rgb.data() + (std::size_t(y) * out.width + x) * 3;
             for (int c = 0; c < 3; ++c) p[c] = float(sum[c] / count);
-            mean += 0.2880402 * p[0] + 0.7118741 * p[1] + 0.0000857 * p[2];
         }
     }
+    return out;
+}
+
+// The whole decode undeveloped, for framing in the gate: box-downsampled to
+// at most the configured preview long edge, linear ProPhoto (D50) to sRGB (D65, Bradford),
+// its mean luminance placed at 18 %, sRGB encoded. Only a guide to frame
+// with; the print is the engine's.
+std::shared_ptr<const Frame::SourcePreview> source_preview(const io::DecodedRaw& in, std::uint32_t edge) {
+    auto preview = std::make_shared<Frame::SourcePreview>();
+    const auto small = reduced_decode(in, edge);
+    const auto& linear = small.rgb;
+    preview->width = small.width;
+    preview->height = small.height;
+    double mean = 0.0;
+    for (size_t i = 0; i < linear.size(); i += 3)
+        mean += 0.2880402 * linear[i] + 0.7118741 * linear[i+1] + 0.0000857 * linear[i+2];
     mean /= double(preview->width) * preview->height;
     const double gain = std::clamp(mean > 0.0 ? 0.18 / mean : 1.0, 0.125, 32.0);
     constexpr double m[9] = {2.03406, -0.72733, -0.30674, -0.22881, 1.23173, -0.00292, -0.00857, -0.15329, 1.16186};
@@ -1220,6 +1231,7 @@ struct PreviewHost::Impl {
     // Retained only for reopening after a failed settings/render operation.
     // Ordinary parameter edits reuse the current GPU source and negative.
     io::DecodedRaw decoded;
+    io::DecodedRaw balance_source; // small linear copy of the current exact decode, built on first use
     FramePtr frame;
     // The geometry the session's picture was cut with (Film Edge, Date Back),
     // or none for the whole decode; and the decode's undeveloped preview,
@@ -1431,18 +1443,35 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
     auto t = Clock::now();
     // A photograph opened before, with the same decode, comes back from the
     // cache (HostOptions::decode_cache_bytes); its timings are its own.
-    if (auto kept = impl_->take_decode(path, mode, settings)) {
-        decoded = std::move(*kept);
-    } else {
-        // The settings' white balance is applied here, at decode (raw_white_balance.hpp).
-        const bool decoded_ok = decode_raw(path, mode, settings, decoded, error);
-        require(decoded_ok, "RAW decode: " + error);
+    bool draft = false;
+    if (tier == Tier::white_balance_preview) {
+        tier = Tier::live;
+        const auto& active = impl_->frame;
+        if (impl_->options.preview_long_edge && active && !active->pair && active->source == path && active->decode_mode == mode &&
+            active->geometry == geometry && impl_->decoded.metadata.camera_raw) {
+            auto previous = settings;
+            set_white_balance(previous, white_balance(active->settings));
+            if (previous == active->settings && !same_decode(active->settings, settings)) {
+                if (impl_->balance_source.rgb.empty())
+                    impl_->balance_source = reduced_decode(impl_->decoded, std::min(1280u, impl_->options.preview_long_edge));
+                decoded = impl_->balance_source;
+                draft = preview_white_balance(decoded, white_balance(settings));
+            }
+        }
+    }
+    if (!draft) {
+        if (auto kept = impl_->take_decode(path, mode, settings)) {
+            decoded = std::move(*kept);
+        } else {
+            const bool decoded_ok = decode_raw(path, mode, settings, decoded, error);
+            require(decoded_ok, "RAW decode: " + error);
+        }
     }
     next->timings.decode_ms = elapsed(t);
     next->metadata = decoded.metadata;
     next->decode_timings = decoded.timings;
     t = Clock::now();
-    const EngineInput input = engine_input(settings, decoded, geometry);
+    const EngineInput input = engine_input(settings, draft ? impl_->decoded : decoded, geometry);
     std::vector<float> cut_rgb;
     std::uint32_t pw = decoded.width, ph = decoded.height;
     if (input.cut) cut_rgb = cut_decode(decoded, input.photo.geometry, pw, ph);
@@ -1472,6 +1501,21 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
     next->overscan_geometry = read_overscan_geometry(opened.session.get());
     auto preview = input.cut ? source_preview(decoded, previewImageLongEdge(impl_->options.preview_long_edge)) : nullptr;
     next->source_preview = preview;
+    if (draft) {
+        // Its geometry is the exact frame's. The small pixels belong solely to
+        // this publication; the exact decode, cache and worker session stay paired.
+        const auto& active = *impl_->frame;
+        next->full_tier = false;
+        next->white_balance_draft = true;
+        next->decode_width = active.decode_width;
+        next->decode_height = active.decode_height;
+        next->picture_width = active.picture_width;
+        next->picture_height = active.picture_height;
+        next->logical_width = active.logicalWidth();
+        next->logical_height = active.logicalHeight();
+        next->timings.total_ms = elapsed(started);
+        return next;
+    }
     // Commit only after all allocations and GPU/CPU work succeeded.
     impl_->session = std::move(opened.session);
     impl_->encoding = opened.encoding;
@@ -1482,6 +1526,7 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
     if (!(impl_->frame && impl_->frame->source == path && impl_->frame->decode_mode == mode &&
           same_decode(impl_->frame->settings, settings)))
         impl_->keep_decode();
+    impl_->balance_source = {};
     impl_->decoded = std::move(decoded);
     impl_->frame = next;
     // A photograph replaces a pair: its pictures are not kept behind it.
@@ -1500,6 +1545,7 @@ FramePtr PreviewHost::render(const RenderSettings& settings, const EngineCut& ge
     // Session.swift:2694-2725). open_raw is transactional, as below.
     if (!same_decode(impl_->frame->settings, settings))
         return open_raw(impl_->frame->source, impl_->frame->decode_mode, settings, geometry, tier, use);
+    if (tier == Tier::white_balance_preview) tier = Tier::live;
     const char* tier_id = tier_name(impl_->options, tier);
     const bool scan_film = validate_settings(settings, impl_->catalog);
     auto next = std::shared_ptr<Frame>(new Frame());
@@ -1808,6 +1854,7 @@ FramePtr PreviewHost::render_pair(const fs::path& identity, const PairInput& pai
         impl_->session = std::move(session);
         impl_->encoding = encoding;
         impl_->keep_decode();   // a photograph left for the pair is kept for a return to it
+        impl_->balance_source = {};
         impl_->decoded = std::move(*composed);
         impl_->session_cut.reset();
         impl_->preview.reset();

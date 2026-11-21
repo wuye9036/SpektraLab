@@ -97,6 +97,9 @@ bool flat_file(const std::filesystem::path& source);
 // patch comes out with R = G = B, which is what spk_qt_predev checks on a
 // synthetic camera.
 
+// Change WB on a small, already decoded linear image for interactive feedback.
+bool preview_white_balance(io::DecodedRaw& image, const WhiteBalance& target);
+
 // The camera-to-output matrix the decode applied (row-major 3 x 3): LibRaw's
 // out_cam -- its ProPhoto table times rgb_cam (convert_to_rgb), or under the
 // headroom policy the matrix it captured.

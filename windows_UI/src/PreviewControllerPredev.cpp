@@ -199,7 +199,7 @@ QVariantMap PreviewController::whiteBalance() const {
         // zero ticks; the rows themselves take 2000..50000 K.
         {"temperatureFrom", 2000.0}, {"temperatureTo", 12000.0}, {"tintFrom", -150.0}, {"tintTo", 150.0},
         {"temperatureZero", camera ? camera->temperature : 5500.0}, {"tintZero", camera ? camera->tint : 0.0},
-        {"pickAvailable", bool(frame_) && balanceable(shotMetadata()) && ready_ && !busy_ && !dialog_open_}};
+        {"pickAvailable", bool(frame_) && !frame_->white_balance_draft && balanceable(shotMetadata()) && ready_ && !busy_ && !dialog_open_}};
     return out;
 }
 
@@ -268,7 +268,7 @@ bool PreviewController::setTintAsShot(bool on) {
 }
 
 bool PreviewController::pickNeutral(double x, double y) {
-    if (!ready_ || !frame_ || busy_ || dialog_open_) return false;
+    if (!ready_ || !frame_ || frame_->white_balance_draft || busy_ || dialog_open_) return false;
     // A half-frame pair: the hole under the point picks its frame, and the
     // pick is that frame's -- sampled on the piece the engine was handed,
     // divided by the gain its hole was exposed with, against its own decode

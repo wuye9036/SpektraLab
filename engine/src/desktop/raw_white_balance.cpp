@@ -210,6 +210,41 @@ std::array<double, 9> camera_to_output(const io::RawMetadata& metadata) {
     return m;
 }
 
+bool preview_white_balance(io::DecodedRaw& image, const WhiteBalance& target) {
+    const auto& meta = image.metadata;
+    if (!meta.camera_raw || meta.colors != 3) return false;
+    auto wanted = meta.camera_whitebalance;
+    std::string error;
+    if (!target.as_shot() && !spkhost::multipliers_for(meta.xyz_to_camera, target.temperature, target.tint, wanted, error))
+        return false;
+    // Both decode policies ultimately restore min-normalised WB. LibRaw can
+    // report a zero as-shot G2 on a three-colour camera; it then uses green.
+    if (wanted[3] == 0) wanted[3] = wanted[1];
+    const auto& applied = meta.post_scale_pre_mul;
+    const double oldMin = *std::min_element(applied.begin(), applied.end());
+    const double newMin = *std::min_element(wanted.begin(), wanted.end());
+    if (!(newMin > 0 && oldMin > 0)) return false;
+    const auto output = camera_to_output(meta);
+    std::array<double, 9> inverse;
+    if (!invert(output, inverse)) return false;
+    // Undo the old camera gains and apply the new ones before film exposure.
+    // A clipped or interpolated camera sample can only be recovered by the
+    // exact RAW decode when the control is released.
+    float matrix[9]{};
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            for (int k = 0; k < 3; ++k)
+                matrix[r*3+c] += float(output[r*3+k] * (wanted[k]*oldMin / (applied[k]*newMin)) * inverse[k*3+c]);
+    for (size_t i = 0; i < image.rgb.size(); i += 3) {
+        const float r = image.rgb[i], g = image.rgb[i+1], b = image.rgb[i+2];
+        for (int k = 0; k < 3; ++k) {
+            const float v = matrix[k*3]*r + matrix[k*3+1]*g + matrix[k*3+2]*b;
+            image.rgb[i+k] = meta.headroom_enabled ? v : std::clamp(v, 0.0f, 1.0f);
+        }
+    }
+    return true;
+}
+
 bool neutral_white_balance(const std::array<double, 9>& xyz_to_camera, const std::array<double, 9>& to_output,
                            const std::array<double, 3>& applied, const std::array<double, 3>& rgb,
                            double& temperature, double& tint, std::string& error) {
