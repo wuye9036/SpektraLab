@@ -85,8 +85,8 @@ Digital Intermediate's view LUTs) and `licenses/` (every notice:
 it. The Vulkan driver is the machine's own.
 
 **The package.** `-Package` copies that folder into
-`<build>/package/SpektrafilmWinApp-<version>-x64/` and zips it to
-`<build>/package/SpektrafilmWinApp-<version>-x64.zip`, the version being the
+`<build>/package/SpektrafilmWinApp-v<version>-x64/` and zips it to
+`<build>/package/SpektrafilmWinApp-v<version>-x64.zip`, the version being the
 About window's (`SPEKTRALAB_VERSION` in `CMakeLists.txt`). Left out:
 `vc_redist.x64.exe` (the runtime DLLs are already beside the executable),
 debug and link artefacts, test executables and anything personal (edit
@@ -102,7 +102,7 @@ build and unsigned. On 2026-10-16 (1.3.3) it was
 **The installer.** `-Installer` packages as above, then compiles
 [installer/SpektrafilmWinApp.iss](installer/SpektrafilmWinApp.iss) with Inno Setup 6 from
 the same staged folder into
-`<build>/package/SpektrafilmWinApp-<version>-x64-Setup.exe`. It installs for
+`<build>/package/SpektrafilmWinApp-v<version>-x64-Setup.exe`. It installs for
 the current user without administrator rights
 (`%LOCALAPPDATA%\Programs\SpektrafilmWinApp`) or, if chosen on its first page, for
 all users (`Program Files`); adds a Start menu shortcut, an optional desktop

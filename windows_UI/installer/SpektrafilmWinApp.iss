@@ -1,7 +1,7 @@
 ; SpektrafilmWinApp's Windows installer (Inno Setup 6). build-msvc.ps1 -Installer
 ; compiles it from the same staged folder the -Package zip is made of:
 ;
-;   ISCC.exe /DAppVersion=1.3.3 /DSourceDir=<stage> /DOutputDir=<dir> SpektrafilmWinApp.iss
+;   ISCC.exe /DAppVersion=1.0 /DSourceDir=<stage> /DOutputDir=<dir> SpektrafilmWinApp.iss
 ;
 ; Per user without administrator rights by default (%LOCALAPPDATA%\Programs),
 ; or for all users (Program Files) when chosen in the first page. The MSVC
@@ -24,7 +24,7 @@
 AppId={{A1C3249B-36BE-4BC8-A969-856FB1ABFE26}
 AppName=SpektrafilmWinApp
 AppVersion={#AppVersion}
-AppVerName=SpektrafilmWinApp {#AppVersion}
+AppVerName=SpektrafilmWinApp v{#AppVersion}
 AppPublisher=SpektrafilmWinApp contributors
 VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\SpektrafilmWinApp
@@ -36,9 +36,9 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 SetupIconFile=..\resources\SpektraLab.ico
 UninstallDisplayIcon={app}\SpektrafilmWinApp.exe
-UninstallDisplayName=SpektrafilmWinApp {#AppVersion}
+UninstallDisplayName=SpektrafilmWinApp v{#AppVersion}
 OutputDir={#OutputDir}
-OutputBaseFilename=SpektrafilmWinApp-{#AppVersion}-x64-Setup
+OutputBaseFilename=SpektrafilmWinApp-v{#AppVersion}-x64-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

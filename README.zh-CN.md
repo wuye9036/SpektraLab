@@ -28,7 +28,7 @@ SpektrafilmWinApp 是一款 Windows 数字暗房。打开一张 RAW 照片，选
 
 ## 运行与构建
 
-需要 64 位 Windows，以及支持 Vulkan 的显卡驱动。下载见[本项目的发布页](https://github.com/wuye9036/SpektraLab/releases)。使用新名称的版本可运行 x64 安装程序，也可将便携 ZIP 完整解压后启动 **SpektrafilmWinApp.exe**。早期安装包沿用 SpektraLab 名称。
+需要 64 位 Windows，以及支持 Vulkan 的显卡驱动。下载见[本项目的发布页](https://github.com/wuye9036/SpektraLab/releases)。SpektrafilmWinApp 从 **v1.0** 开始独立编号。可运行 x64 安装程序，也可将便携 ZIP 完整解压后启动 **SpektrafilmWinApp.exe**。早期安装包沿用 SpektraLab 名称。
 
 从源码构建时，先安装 Visual Studio 2022 的「使用 C++ 的桌面开发」工作负载，再按 [Windows 构建指南](windows_UI/README.md#build-msvc-2022) 准备 Qt、LibRaw 和着色器工具。在仓库根目录运行：
 

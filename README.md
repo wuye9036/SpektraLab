@@ -28,7 +28,7 @@ The interface is available in English, Simplified Chinese, Japanese and Spanish.
 
 ## Run or build
 
-Use 64-bit Windows and a GPU with a Vulkan-capable driver. Release downloads are listed on [this fork’s releases page](https://github.com/wuye9036/SpektraLab/releases). For builds under the new name, run the x64 installer or extract the whole portable ZIP and launch **SpektrafilmWinApp.exe**. Earlier packages use the SpektraLab name.
+Use 64-bit Windows and a GPU with a Vulkan-capable driver. Release downloads are listed on [this fork’s releases page](https://github.com/wuye9036/SpektraLab/releases). The first release under the SpektrafilmWinApp name is **v1.0**. Run the x64 installer or extract the whole portable ZIP and launch **SpektrafilmWinApp.exe**. Earlier packages use the SpektraLab name.
 
 To build from the repository root, install Visual Studio 2022 with Desktop development with C++, then prepare Qt, LibRaw and the shader tools as described in the [Windows build guide](windows_UI/README.md#build-msvc-2022).
 

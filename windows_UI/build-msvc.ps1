@@ -25,9 +25,9 @@ param(
 # The Visual Studio environment is imported into this process only; PATH and
 # the rest of the environment are restored on exit.
 # -Package (Release, deployed) zips the app folder, after the tests when
-# -RunTests is given, into <build>/package/SpektrafilmWinApp-<version>-x64.zip.
+# -RunTests is given, into <build>/package/SpektrafilmWinApp-v<version>-x64.zip.
 # -Installer does the same and then compiles installer/SpektrafilmWinApp.iss from that
-# staged folder into SpektrafilmWinApp-<version>-x64-Setup.exe beside it, with
+# staged folder into SpektrafilmWinApp-v<version>-x64-Setup.exe beside it, with
 # Inno Setup 6 (-InnoSetupCompiler, default <deps>/InnoSetup6/ISCC.exe).
 $ErrorActionPreference = 'Stop'
 if ($Installer) { $Package = $true }
@@ -158,7 +158,7 @@ try {
         $cmakeLists = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'CMakeLists.txt') -Raw
         if ($cmakeLists -notmatch 'set\(SPEKTRALAB_VERSION "([^"]+)"\)') { throw 'SPEKTRALAB_VERSION not found in windows_UI/CMakeLists.txt.' }
         $version = $Matches[1]
-        $name = "SpektrafilmWinApp-$version-x64"
+        $name = "SpektrafilmWinApp-v$version-x64"
         $packageDirectory = Join-Path $BuildDirectory 'package'
         $stage = Join-Path $packageDirectory $name
         $zip = Join-Path $packageDirectory "$name.zip"

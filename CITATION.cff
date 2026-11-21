@@ -3,6 +3,7 @@ message: |
   Cite this repository for the Windows editor. Cite Andrea Volpato’s
   spektrafilm for the spectral model and measured colour profiles.
 title: "SpektrafilmWinApp"
+version: "1.0"
 abstract: |
   An independently maintained Windows darkroom derived from SpektraLab.
   The Qt Quick editor develops photographs with a native Vulkan renderer,

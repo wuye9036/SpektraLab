@@ -455,10 +455,14 @@ endif()
 # The Settings and About windows, the application menu and the preferences
 # file (src/AppSettings.*, src/AppShell.*, qml/shell/). About and the Windows
 # packages share this version.
-set(SPEKTRALAB_VERSION "1.3.3")
-string(REPLACE "." "," spk_resource_version "${SPEKTRALAB_VERSION}")
+set(SPEKTRALAB_VERSION "1.0")
+# Windows stores four numeric components even when the public version is shorter.
+string(REPLACE "." ";" spk_version_parts "${SPEKTRALAB_VERSION}")
+list(APPEND spk_version_parts 0 0 0)
+list(SUBLIST spk_version_parts 0 4 spk_resource_parts)
+list(JOIN spk_resource_parts "," spk_resource_version)
 set_source_files_properties(resources/SpektraLab.rc PROPERTIES
-    COMPILE_DEFINITIONS "SPK_FILE_VERSION=${spk_resource_version},0")
+    COMPILE_DEFINITIONS "SPK_FILE_VERSION=${spk_resource_version}")
 target_sources(SpektrafilmWinApp PRIVATE src/AppSettings.hpp src/AppSettings.cpp src/AppShell.hpp src/AppShell.cpp
     src/ShellCapture.hpp src/ShellCapture.cpp)
 target_compile_definitions(SpektrafilmWinApp PRIVATE SPEKTRALAB_VERSION="${SPEKTRALAB_VERSION}")
