@@ -2,7 +2,7 @@
 
 [English](README.md) · **简体中文**
 
-SpektrafilmWinApp 是一款 Windows 数字暗房。打开一张 RAW 照片，选定胶片，再选相纸放印。光谱模型模拟光线通过胶片和相纸的过程：你可以调整底片曝光，也可以保留同一张底片，换一种相纸或滤色重新放印。
+SpektrafilmWinApp 是一款 Windows 数字暗房，支持 RAW、TIFF、JPEG 和 PNG 照片。它用光谱模型模拟光线通过胶片和相纸的过程，重现不同胶片与相纸组合的成像效果。
 
 本项目从 [SpektraLab](https://github.com/JamesQiu2005/SpektraLab) 分支而来，现已独立开发和维护。Windows 编辑器的开发和版本发布都在本仓库进行。
 
@@ -10,33 +10,18 @@ SpektrafilmWinApp 是一款 Windows 数字暗房。打开一张 RAW 照片，选
 
 *码头夜景，原片 `7IV05987.ARW`，摄影：wuye9036。截图使用 Kodak Portra 400 胶片和 Kodak Professional Supra Endura 相纸，胶片曝光 −2 EV，已开启相纸 EDR。照片及此显影版本采用 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 授权。*
 
-## 从一张 RAW 到第一张成片
+## 主要特性
 
-1. 按 **Ctrl+O** 打开 RAW、TIFF、JPEG 或 PNG。按 **Ctrl+Shift+O** 可以打开整个文件夹，在胶片栏中选片。
-2. 在左侧选择胶片和相纸，在右侧的**显影前**面板设置 RAW 白平衡和胶片曝光。要改变放印亮度或色调，可以调节放大机的曝光和滤色。
-3. 按 **Y** 对照原片与成片。在**显影后**面板用曲线或色轮调整成片，按 **S** 软打样，预览选定导出色彩空间中的效果。
-4. 按 **Ctrl+E** 选择导出配方，保存为 JPEG、PNG 或 16 位 TIFF。编辑参数按照片单独保存，保留原始文件。
+- **全新设计的高光、阴影与对比度算法。** 调整成片的高光和阴影时，算法根据局部亮度判断调整幅度，保留亮部和暗部的纹理。对比度曲线固定黑点、中灰和纸白，增强反差时，两端的细微层次依然可辨。
+- **从显影到预览的全 GPU 加速管线。** Vulkan 在 GPU 上完成胶片和相纸的光谱模拟，并将渲染结果直接共享给 Direct3D 11。成片调色、直方图分析和显示色彩转换都在 GPU 上完成。
+- **冲印前可独立调节高光与阴影。** 在模拟胶片曝光之前，场景中的亮部和暗部可以分别提亮或压暗最多两档。例如，夜景可以压低灯光亮度，也可以提亮背光的前景，同时保留各区域内部的纹理。
+- **多语言界面。** 编辑控件、设置和软件内说明均支持简体中文、英语、日语和西班牙语。
 
-## Windows 编辑器的功能
+编辑器支持彩色负片、反转片和黑白胶片，颗粒与光晕随画幅大小变化。暗房工具包括 RAW 白平衡预览、镜头校正、片边、日期后背和半格拼片。已标定的相纸可通过放印 EDR 呈现更多高光层次。ProPhoto RGB 工作流程支持按显示器进行色彩管理、软打样和批量导出。
 
-- **交互式 RAW 显影。** 拖动色温或色调时，GPU 预览随之更新；松手后，编辑器按完整分辨率细化图像。镜头畸变校正可读取受支持的 Sony ARW 和 DNG 内嵌数据，也可载入适用的 Adobe LCP 直线投影镜头配置文件。
-- **胶片与相纸。** 可选彩色负片、反转片和黑白胶片。画幅大小决定颗粒和光晕的物理尺度。使用已标定的彩色相纸时，放印扩展动态范围（Print EDR）可将相纸额外的高光层次映射到 SDR 成片中。
-- **构图与片边。** 裁剪时可叠加中心十字、三分线或方格。开启片边可显示对应胶片的边缘印字，日期后背可将日期曝光到画面中。两张半格照片可以拼在同一段胶片上，一起导出。
-- **色彩与导出。** 编辑器在 ProPhoto RGB 空间中工作，按当前显示器的 ICC 配置显示照片。软打样和色域警告可预览导出配方对颜色的影响。选中多张照片即可按同一配方批量导出。
+## Windows 版本
 
-界面支持简体中文、英语、日语和西班牙语。
-
-## 运行与构建
-
-需要 64 位 Windows，以及支持 Vulkan 的显卡驱动。下载见[本项目的发布页](https://github.com/wuye9036/SpektraLab/releases)。SpektrafilmWinApp 从 **v1.0** 开始独立编号。可运行 x64 安装程序，也可将便携 ZIP 完整解压后启动 **SpektrafilmWinApp.exe**。早期安装包沿用 SpektraLab 名称。
-
-从源码构建时，先安装 Visual Studio 2022 的「使用 C++ 的桌面开发」工作负载，再按 [Windows 构建指南](windows_UI/README.md#build-msvc-2022) 准备 Qt、LibRaw 和着色器工具。在仓库根目录运行：
-
-```powershell
-.\windows_UI\build-msvc.ps1 -SourceDirectory . -DependencyDirectory ..\deps -BuildDirectory .\_build\release -RunTests -Package
-```
-
-脚本构建编辑器、运行 CTest，并将便携 ZIP 写入 `_build/release/package/`。准备好 Inno Setup 6 后，使用 `-Installer` 还可生成安装程序。
+SpektrafilmWinApp 从 **v1.0** 开始独立编号，提供 x64 安装程序和便携 ZIP，需要 64 位 Windows 和支持 Vulkan 的显卡驱动。[版本发布](https://github.com/wuye9036/SpektraLab/releases) · [Windows 构建指南](windows_UI/README.md#build-msvc-2022)
 
 ## 致谢与许可
 

@@ -2,7 +2,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-SpektrafilmWinApp is a digital darkroom for Windows. Open a RAW photograph, choose a film stock, then print the negative on a paper of your choice. The spectral model follows light through the film and paper, so you can change the exposure on the negative or keep that negative and make a different print.
+SpektrafilmWinApp is a digital darkroom for Windows. Its spectral model follows light through film and photographic paper to simulate the development and printing of RAW, TIFF, JPEG and PNG photographs.
 
 This is an independently developed and maintained fork of [SpektraLab](https://github.com/JamesQiu2005/SpektraLab). The Windows editor and its releases live in this repository.
 
@@ -10,33 +10,18 @@ This is an independently developed and maintained fork of [SpektraLab](https://g
 
 *Night waterfront from `7IV05987.ARW`, photographed by wuye9036. Developed with Kodak Portra 400 on Kodak Professional Supra Endura, film exposure −2 EV and Print EDR enabled. The photograph and its rendition are licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).*
 
-## Make a first print
+## Features
 
-1. Press **Ctrl+O** to open a RAW, TIFF, JPEG or PNG. **Ctrl+Shift+O** opens a folder in the filmstrip.
-2. Choose film and paper in the left panel. In **Pre-Dev**, adjust the RAW white balance and film exposure. Use the enlarger to change the print exposure or filtration.
-3. Press **Y** to compare the result with the original. In **Post-Dev**, adjust the finished print with curves or colour wheels. Press **S** to soft-proof it in the export colour space.
-4. Press **Ctrl+E** to choose a recipe and export JPEG, PNG or 16-bit TIFF. The editor saves adjustments for each photograph separately and preserves the source file.
+- **Redesigned highlights, shadows and contrast.** On the finished print, highlight and shadow adjustments use local brightness to preserve detail within bright and dark regions. The contrast curve holds black, middle grey and paper white in place, keeping fine tonal differences visible near both ends of the scale.
+- **Fully GPU-accelerated rendering and preview.** Vulkan runs the spectral film and paper simulation. The Windows preview shares the rendered image directly with Direct3D 11, keeping print grading, histogram analysis and display colour conversion on the GPU.
+- **Highlight and shadow adjustments before development.** Bright and dark regions of the scene can each be adjusted by up to two stops before film exposure. This makes room for bright lamps or brings out texture in a shaded foreground while preserving detail within each region.
+- **Four interface languages.** English, Simplified Chinese, Japanese and Spanish cover the editing controls, settings and in-app explanations.
 
-## Inside the Windows editor
+The editor supports colour negatives, slide film and black-and-white stocks, with grain and halation scaled to the film format. RAW white-balance previews and lens correction, film edges, date imprints and half-frame pairs round out the darkroom tools. Print EDR brings out additional highlight detail on calibrated papers. The ProPhoto RGB workflow includes per-monitor colour management, soft proofing and batch export.
 
-- **Interactive RAW development.** Temperature and tint update the GPU preview as you drag. When you finish, the editor refines the image at full resolution. Lens correction reads supported embedded Sony ARW and DNG distortion profiles or a rectilinear Adobe LCP you supply.
-- **Film and paper.** Work with colour negatives, slides or black-and-white film. Film format sets the physical scale of grain and halation. On calibrated colour papers, Print EDR maps the paper’s additional highlight range into an SDR print.
-- **Framing and film strips.** Use a crosshair, thirds or a square grid to frame a crop. Film Edge adds the stock’s rebate markings and Date Back exposes a date. Two half frames can share one strip and export as one picture.
-- **Colour and export.** The editor works in ProPhoto RGB and uses the active monitor’s ICC profile. Soft proof and gamut warning show how a recipe handles colour before export. A batch can reuse one recipe for the selected photographs.
+## Windows release
 
-The interface is available in English, Simplified Chinese, Japanese and Spanish.
-
-## Run or build
-
-Use 64-bit Windows and a GPU with a Vulkan-capable driver. Release downloads are listed on [this fork’s releases page](https://github.com/wuye9036/SpektraLab/releases). The first release under the SpektrafilmWinApp name is **v1.0**. Run the x64 installer or extract the whole portable ZIP and launch **SpektrafilmWinApp.exe**. Earlier packages use the SpektraLab name.
-
-To build from the repository root, install Visual Studio 2022 with Desktop development with C++, then prepare Qt, LibRaw and the shader tools as described in the [Windows build guide](windows_UI/README.md#build-msvc-2022).
-
-```powershell
-.\windows_UI\build-msvc.ps1 -SourceDirectory . -DependencyDirectory ..\deps -BuildDirectory .\_build\release -RunTests -Package
-```
-
-The script builds the editor, runs CTest and writes the portable ZIP under `_build/release/package/`. Use `-Installer` with Inno Setup 6 to also build the installer.
+**v1.0** starts the independent SpektrafilmWinApp release series. The x64 installer and portable ZIP require 64-bit Windows and a Vulkan-capable graphics driver. [Releases](https://github.com/wuye9036/SpektraLab/releases) · [Windows build guide](windows_UI/README.md#build-msvc-2022)
 
 ## Credits and licences
 
