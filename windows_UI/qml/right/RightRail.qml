@@ -68,8 +68,7 @@ Rectangle {
                 FilmFormatSection {}
                 DecodeSection {}
                 ScenePlacementSection {}
-                ToneMaskSection {}
-                InfoSection { divider: false }
+                ToneMaskSection { divider: false }
             }
         }
         // Post-Dev (RightSections.swift): the grade on the finished print.

@@ -417,6 +417,7 @@ OutputEncoding output_encoding(const Json& open_reply);
 // and TIFF export are separate operations. Re-renders have zero decode/open
 // time unless a previous engine failure required reopening the retained input.
 struct Timings {
+    double raw_decode_ms = 0.0; // Actual RAW read in this request, excluding cache hits and drafts.
     double decode_ms = 0.0, open_ms = 0.0, params_ms = 0.0;
     double render_ms = 0.0, engine_render_ms = 0.0;
     double display_ms = 0.0, total_ms = 0.0;
@@ -598,7 +599,7 @@ public:
     // session on the newly cut picture from the retained decode.
     FramePtr open_raw(const std::filesystem::path& source, DecodeMode mode,
                       const RenderSettings& settings = RenderSettings(), const EngineCut& geometry = EngineCut(),
-                      Tier tier = Tier::full, FrameUse use = FrameUse::display);
+                      Tier tier = Tier::full, FrameUse use = FrameUse::display, std::stop_token stop = {});
     // Only changed settings are sent. Print-side edits request spk_reprint;
     // the result's actual cache flag determines whether reuse occurred.
     // A failure never mutates the previously returned Frame. Settings that
@@ -611,7 +612,7 @@ public:
     // cancel_full_render may stop: it then throws RenderCancelled and keeps
     // the session.
     FramePtr render(const RenderSettings& settings, const EngineCut& geometry = EngineCut(), Tier tier = Tier::full,
-                    FrameUse use = FrameUse::display);
+                    FrameUse use = FrameUse::display, std::stop_token stop = {});
     // From any thread: stop a cancellable full render in flight, if any (a
     // no-op otherwise). Never waits for it.
     void cancel_full_render() noexcept;

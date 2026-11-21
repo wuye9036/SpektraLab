@@ -78,7 +78,7 @@ bool as_shot_white_balance(const io::RawMetadata& metadata, double& temperature,
 // on macOS) and `mode` changes nothing. `metadata.decoder_name` names the
 // file and the space it was read in ("TIFF, sRGB IEC61966-2.1").
 bool decode_raw(const std::filesystem::path& source, DecodeMode mode, const RenderSettings& settings,
-                io::DecodedRaw& out, std::string& error);
+                io::DecodedRaw& out, std::string& error, std::stop_token stop = {});
 
 // Whether `source` is a flat (encoded) file the decode above reads through
 // image_io rather than LibRaw: by its signature, as image_io sniffs it, for

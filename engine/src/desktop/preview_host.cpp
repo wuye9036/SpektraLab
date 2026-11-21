@@ -1,6 +1,7 @@
 #include "preview_host.hpp"
 #include "io/image_writer.hpp"
 #include "raw_white_balance.hpp"
+#include "pipeline/render_request.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1210,12 +1211,14 @@ struct PreviewHost::Impl {
     double engine_create_ms = 0.0;
     EnginePtr engine;
     spk_status renderFrame(Frame& frame, spk_session* live, const char* tier, bool reprint,
-                           const OutputEncoding& encoding, const EngineCut& geometry, bool cut, FrameUse use) {
+                           const OutputEncoding& encoding, const EngineCut& geometry, bool cut, FrameUse use, std::stop_token stop = {}) {
+        std::function<bool()> interrupted;
+        if (stop.stop_possible()) interrupted = [stop] { return stop.stop_requested(); };
 #ifdef _WIN32
         if (use==FrameUse::display && !options.bgra8_display && options.beginDisplay) {
             frame.display = options.beginDisplay(encoding);
             if (frame.display && (cut || geometry.identity() || frame.display->allowGeometry)) {
-                auto status = gpu::render_d3d11(live, tier, reprint, *frame.display, frame.result_, true, true);
+                auto status = gpu::render_d3d11(live, tier, reprint, *frame.display, frame.result_, true, true, std::move(interrupted));
                 if (frame.display->texture) frame.display->engineOwner = engine;
                 else frame.display.reset();
                 return status;
@@ -1223,6 +1226,7 @@ struct PreviewHost::Impl {
             frame.display.reset();
         }
 #endif
+        if (interrupted) return render_interruptible(live, tier, reprint, &frame.result_, std::move(interrupted));
         return reprint ? spk_reprint(live, tier, &frame.result_) : spk_render(live, tier, &frame.result_);
     }
     // Declaration order makes session release precede engine destruction.
@@ -1428,7 +1432,7 @@ const io::DecodedRaw& PreviewHost::input() const noexcept { return impl_->decode
 const io::DecodedRaw& PreviewHost::decoded() const noexcept { return impl_->decoded; }
 
 FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const RenderSettings& settings,
-                               const EngineCut& geometry, Tier tier, FrameUse use) {
+                               const EngineCut& geometry, Tier tier, FrameUse use, std::stop_token stop) {
     const auto started = Clock::now();
     const bool scan_film = validate_settings(settings, impl_->catalog);
     require(mode == DecodeMode::compatible16 || mode == DecodeMode::headroom, "Unknown RAW decode mode");
@@ -1460,12 +1464,18 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
             }
         }
     }
+    // Drafts can still advance the canvas during a gesture. Retire an obsolete
+    // exact decode before it can replace the active input or enter its cache.
+    if (draft) stop = {};
+    if (stop.stop_requested()) throw RenderCancelled();
     if (!draft) {
         if (auto kept = impl_->take_decode(path, mode, settings)) {
             decoded = std::move(*kept);
         } else {
-            const bool decoded_ok = decode_raw(path, mode, settings, decoded, error);
+            const bool decoded_ok = decode_raw(path, mode, settings, decoded, error, stop);
+            if (stop.stop_requested()) throw RenderCancelled();
             require(decoded_ok, "RAW decode: " + error);
+            if (decoded.metadata.camera_raw) next->timings.raw_decode_ms = elapsed(t);
         }
     }
     next->timings.decode_ms = elapsed(t);
@@ -1476,6 +1486,7 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
     std::vector<float> cut_rgb;
     std::uint32_t pw = decoded.width, ph = decoded.height;
     if (input.cut) cut_rgb = cut_decode(decoded, input.photo.geometry, pw, ph);
+    if (stop.stop_requested()) throw RenderCancelled();
     auto opened = open_session(impl_->engine.get(), input.cut ? cut_rgb.data() : decoded.rgb.data(), pw, ph,
                                settings, impl_->catalog, impl_->options.output_color_space, input.photo,
                                impl_->options.preview_long_edge);
@@ -1483,7 +1494,14 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
     next->timings.open_ms = elapsed(t);
     next->encoding = opened.encoding;
     t = Clock::now();
-    const auto status = impl_->renderFrame(*next, opened.session.get(), tier_name(impl_->options, tier), false, opened.encoding, input.photo.geometry, input.cut, use);
+    if (stop.stop_requested()) throw RenderCancelled();
+    // The old frame stays usable if refinement is cancelled. Its cached negatives,
+    // though, can be rebuilt from its source and would overlap the new full negative.
+    if (tier == Tier::full && impl_->session && impl_->frame && impl_->frame->source == path &&
+        !same_decode(impl_->frame->settings, settings))
+        discard_tier_cache(impl_->session.get());
+    const auto status = impl_->renderFrame(*next, opened.session.get(), tier_name(impl_->options, tier), false, opened.encoding, input.photo.geometry, input.cut, use, stop);
+    if (stop.stop_requested()) throw RenderCancelled();
     require(status == SPK_OK, "Render: " + std::string(spk_last_error(impl_->engine.get())));
     next->timings.render_ms = elapsed(t);
     next->timings.engine_render_ms = next->result_.elapsed_ms;
@@ -1517,6 +1535,7 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
         next->timings.total_ms = elapsed(started);
         return next;
     }
+    if (stop.stop_requested()) throw RenderCancelled();
     // Commit only after all allocations and GPU/CPU work succeeded.
     impl_->session = std::move(opened.session);
     impl_->encoding = opened.encoding;
@@ -1537,7 +1556,7 @@ FramePtr PreviewHost::open_raw(const fs::path& source, DecodeMode mode, const Re
     return next;
 }
 
-FramePtr PreviewHost::render(const RenderSettings& settings, const EngineCut& geometry, Tier tier, FrameUse use) {
+FramePtr PreviewHost::render(const RenderSettings& settings, const EngineCut& geometry, Tier tier, FrameUse use, std::stop_token stop) {
     const auto started = Clock::now();
     require(bool(impl_->frame), "Open a RAW image before rendering");
     require(!impl_->pair, "A half-frame pair renders through render_pair");
@@ -1545,7 +1564,7 @@ FramePtr PreviewHost::render(const RenderSettings& settings, const EngineCut& ge
     // decoded again and a new negative developed (macOS re-decodes too,
     // Session.swift:2694-2725). open_raw is transactional, as below.
     if (!same_decode(impl_->frame->settings, settings))
-        return open_raw(impl_->frame->source, impl_->frame->decode_mode, settings, geometry, tier, use);
+        return open_raw(impl_->frame->source, impl_->frame->decode_mode, settings, geometry, tier, use, stop);
     if (tier == Tier::white_balance_preview) tier = Tier::live;
     const char* tier_id = tier_name(impl_->options, tier);
     const bool scan_film = validate_settings(settings, impl_->catalog);

@@ -125,7 +125,7 @@ qt_add_qml_module(SpektraLabQt URI SpektraLab VERSION 1.0
         qml/centre/CropOverlay.qml qml/centre/Filmstrip.qml
         qml/right/RightRail.qml qml/right/LatitudeSection.qml qml/right/CameraSection.qml
         qml/right/FilmFormatSection.qml qml/right/ScenePlacementSection.qml
-        qml/right/ToneMaskSection.qml qml/right/DecodeSection.qml qml/right/InfoSection.qml
+        qml/right/ToneMaskSection.qml qml/right/DecodeSection.qml
         qml/right/StatusSection.qml
         qml/export/ExportPage.qml qml/export/ExportField.qml qml/export/TokenChip.qml
     NO_CACHEGEN)

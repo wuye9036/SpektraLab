@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <stop_token>
 
 namespace spk::io {
 
@@ -118,7 +119,7 @@ bool decode_raw_compatible(const std::filesystem::path& source,
 // LibRaw's user_mul) in place of the as-shot ones. nullptr is the overload
 // above. Used by spektralab-host for Temperature/Tint at decode.
 bool decode_raw_compatible(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                           DecodedRaw& out, std::string& error);
+                           DecodedRaw& out, std::string& error, std::stop_token stop = {});
 
 // Experimental expanded-output policy for conventional three-colour Bayer
 // RAW only. As-shot WB is normalised by its largest multiplier (highlight=1)
@@ -136,6 +137,6 @@ bool decode_raw_headroom(const std::filesystem::path& source,
 // does the as-shot ones under this policy, so the exposure restore holds.
 // nullptr is the overload above. Used by the Windows desktop host.
 bool decode_raw_headroom(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                         DecodedRaw& out, std::string& error);
+                         DecodedRaw& out, std::string& error, std::stop_token stop = {});
 
 }  // namespace spk::io

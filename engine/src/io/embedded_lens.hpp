@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <span>
 #include <vector>
+#include <stop_token>
 
 namespace spk::io {
 struct DecodedRaw;
@@ -19,5 +20,5 @@ struct EmbeddedLens {
 };
 
 EmbeddedLens dng_lens(std::span<const std::uint8_t> opcode_list3);
-void apply_lens_profile(DecodedRaw& frame, const EmbeddedLens& lens);
+void apply_lens_profile(DecodedRaw& frame, const EmbeddedLens& lens, std::stop_token stop = {});
 } // namespace spk::io

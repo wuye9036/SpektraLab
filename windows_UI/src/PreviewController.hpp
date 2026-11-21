@@ -779,6 +779,7 @@ private:
         spk::desktop::output::Geometry geometry;
         spk::desktop::FramePtr frame;
         Publication publication;
+        double preceding_raw_decode_ms=0; // Exact preview refined by this full render.
         // A full render the next edit stopped (PreviewHost::RenderCancelled):
         // no failure, and the displayed frame stays.
         bool cancelled=false;
@@ -967,6 +968,7 @@ private:
     const bool live_development_;
     QTimer full_timer_;
     bool full_job_=false;
+    std::stop_source balance_stop_{std::nostopstate};
     std::mutex host_mutex_;
     spk::desktop::PreviewHost* host_=nullptr;
     void scheduleFullRender();

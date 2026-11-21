@@ -33,6 +33,8 @@ Rectangle {
             Text {
                 Layout.fillWidth: true
                 text: footer.editor.closePending ? L10n.tr("status.closing") : preview.status
+                wrapMode: Text.Wrap
+                maximumLineCount: 4
                 elide: Text.ElideRight
                 color: preview.failed ? Theme.warning : Theme.dim
                 font: Theme.forText(Theme.captionFont, text)

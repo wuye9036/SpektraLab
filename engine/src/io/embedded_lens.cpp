@@ -56,13 +56,13 @@ Centre oriented(std::array<double, 2> c, int flip, int w, int h) {
 }
 // Independent source rows; both passes join before the next reads their output.
 template<class F>
-void lens_rows(int height, F row) {
+void lens_rows(int height, std::stop_token stop, F row) {
     const int limit = std::clamp(height / 64, 1, 12);
     const int workers = std::clamp(int(std::thread::hardware_concurrency()), 1, limit);
     auto run = [&](int part) {
         const int begin = int(int64_t(height) * part / workers);
         const int end = int(int64_t(height) * (part + 1) / workers);
-        for (int y = begin; y < end; ++y) row(y);
+        for (int y = begin; y < end && !stop.stop_requested(); ++y) row(y);
     };
     std::vector<std::jthread> threads;
     for (int i = 1; i < workers; ++i) threads.emplace_back(run, i);
@@ -101,14 +101,14 @@ EmbeddedLens dng_lens(Bytes list) {
     return lens;
 }
 
-void apply_lens_profile(DecodedRaw& frame, const EmbeddedLens& lens) {
+void apply_lens_profile(DecodedRaw& frame, const EmbeddedLens& lens, std::stop_token stop) {
     if (!lens.available() || frame.width < 2 || frame.height < 2) return;
     const int w = int(frame.width), h = int(frame.height);
     const auto warp = oriented(lens.warp_center, frame.metadata.raw_flip, w, h);
     const auto gain = oriented(lens.gain_center, frame.metadata.raw_flip, w, h);
     // Light falloff belongs to the sensor coordinates, before resampling.
     if (!lens.gain.empty()) {
-        lens_rows(h, [&](int y) {
+        lens_rows(h, stop, [&](int y) {
             for (int x = 0; x < w; ++x) {
                 const auto factor = lookup(lens.gain, std::hypot(x-gain.x, y-gain.y) * gain.inv_radius);
                 auto* rgb = frame.rgb.data() + (size_t(y) * w + x) * 3;
@@ -116,13 +116,13 @@ void apply_lens_profile(DecodedRaw& frame, const EmbeddedLens& lens) {
             }
         });
     }
-    if (lens.scales[0].empty()) return;
+    if (stop.stop_requested() || lens.scales[0].empty()) return;
     // Keep the corrected viewport inside the photograph on every plane.
     double zoom = 1;
     for (const auto& curve : lens.scales)
         if (!curve.empty()) zoom = std::max(zoom, double(*std::max_element(curve.begin(), curve.end())));
     std::vector<float> corrected(frame.rgb.size());
-    lens_rows(h, [&](int y) {
+    lens_rows(h, stop, [&](int y) {
         for (int x = 0; x < w; ++x) {
             const double dx = (x-warp.x)/zoom, dy = (y-warp.y)/zoom;
             const double r = std::sqrt(dx*dx + dy*dy) * warp.inv_radius;
@@ -139,6 +139,6 @@ void apply_lens_profile(DecodedRaw& frame, const EmbeddedLens& lens) {
             }
         }
     });
-    frame.rgb.swap(corrected);
+    if (!stop.stop_requested()) frame.rgb.swap(corrected);
 }
 } // namespace spk::io

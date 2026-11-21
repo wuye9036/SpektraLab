@@ -24,6 +24,7 @@
 // per-run argument, so the parameter works. That is a knowing divergence and
 // the render-parity harness reports it as one.
 #pragma once
+#include <functional>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -106,6 +107,8 @@ struct Progress {
     int fired = 0;
     std::string stage = "queued";
     bool cancelled = false;
+    std::function<bool()> interrupted;
+    bool stop_requested() const { return cancelled || (interrupted && interrupted()); }
     bool done = false;
     bool detailed = false;
     std::unordered_map<std::string, double> node_ms;
@@ -339,7 +342,8 @@ public:
     void set_source_long_edge(uint32_t long_edge, uint32_t frame_long_edge);
 
     // `Tap.RGB_IN` -> `Tap.CMY_FILM`. `out` is the developed negative.
-    bool run_film(const Image& in, Image& out, Progress* progress, std::string& error);
+    bool run_film(const Image& in, Image& out, Progress* progress, std::string& error,
+                  std::optional<uint32_t> replay_seed = {});
     // `Tap.CMY_FILM` -> `Tap.RGB_OUT`.
     bool run_print(const Image& cmy, Image& out, Progress* progress, std::string& error);
 
@@ -375,6 +379,7 @@ public:
     // exposed alike; empty (a standalone pipeline, `warm_up`) meters the
     // input as the reference does.
     void set_auto_exposure_ev(std::optional<double> ev) { injected_ev_ = ev; }
+    uint32_t last_film_seed() const { return film_seed_; }
     // What the node applied in the last `run_film`; empty with the meter off.
     std::optional<double> last_auto_exposure_ev() const { return last_ae_ev_; }
 
@@ -548,7 +553,8 @@ public:
     /// and it is a scaffold, not the shipping shape. §4.4's topology is
     /// strip-outer within segments, with whole-frame nodes materialised once
     /// per run at a segment boundary -- step 5's shape, not this one.
-    bool run_film_striped(const Image& in, Image& out, Progress* progress, std::string& error);
+    bool run_film_striped(const Image& in, Image& out, Progress* progress, std::string& error,
+                          std::optional<uint32_t> replay_seed = {});
     bool run_print_striped(const Image& cmy, Image& out, Progress* progress, std::string& error);
 
     // The film's pixel pitch for the frame most recently run through
@@ -593,7 +599,8 @@ private:
     /// typing is plumbing, not a fix. **Plumbed and not yet verified**: step 5
     /// is where a band first reaches a node, and where a pitch taken from one
     /// would first bend every grain size and blur radius in the picture.
-    bool film_prefix(const Image& in, const FrameShape& frame, Image& cur, std::string& error);
+    bool film_prefix(const Image& in, const FrameShape& frame, Image& cur, std::string& error,
+                     std::optional<uint32_t> replay_seed);
     bool film_segment(Chain& cur, Image& out, std::string& error);
     /// The print side's split. Its prefix is the enlarger's live-mutable
     /// constants, which are host constants rather than pixels, and its segment

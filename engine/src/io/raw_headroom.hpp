@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <stop_token>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -24,6 +25,6 @@ bool convert_camera_rgb_headroom(
     std::uint32_t width, std::uint32_t height, int flip,
     const std::array<float, 12>& camera_to_output, double exposure_restore,
     std::vector<float>& rgb, std::uint32_t& output_width,
-    std::uint32_t& output_height, std::string& error);
+    std::uint32_t& output_height, std::string& error, std::stop_token stop = {});
 
 }  // namespace spk::io::detail

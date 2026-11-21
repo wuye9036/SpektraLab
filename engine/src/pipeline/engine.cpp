@@ -23,6 +23,7 @@
 #ifdef _WIN32
 #include "gpu/d3d11_target.hpp"
 #endif
+#include "render_request.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -221,6 +222,9 @@ struct spk_session {
         uint32_t image_long_edge = 0;
         Image negative;   // Tap.CMY_FILM
         bool has_negative = false;
+        // Retain only the seed if a pending replacement evicts this plane.
+        // Rebuilding a negative for a reprint must reproduce its grain.
+        std::optional<uint32_t> film_seed;
         /// RFC-032 §27: the frame `negative`'s film canvas was laid out for,
         /// so a reprint can lay it out again. Zero without overscan.
         uint32_t overscan_frame_w = 0, overscan_frame_h = 0;
@@ -1073,11 +1077,11 @@ bool ensure_meter(spk_session* session, std::string& error) {
 // stays exactly what ships, which is what makes §6's hash comparison mean
 // anything -- and one call site each, so the graph cannot drift between them.
 bool run_film_for(spk_session* session, const Image& source, Image& negative,
-                  Progress* progress, std::string& error) {
+                  Progress* progress, std::string& error, std::optional<uint32_t> replay_seed) {
     if (session->params.settings.striped) {
-        return session->pipeline->run_film_striped(source, negative, progress, error);
+        return session->pipeline->run_film_striped(source, negative, progress, error, replay_seed);
     }
-    return session->pipeline->run_film(source, negative, progress, error);
+    return session->pipeline->run_film(source, negative, progress, error, replay_seed);
 }
 
 bool run_print_for(spk_session* session, const Image& negative, Image& rgb,
@@ -1105,7 +1109,7 @@ bool negative_for(spk_session* session, const Tier& tier, Progress* progress, Im
         camera.auto_exposure ? std::optional<double>(session->meter.evs.of(camera.auto_exposure_method))
                              : std::nullopt);
     Image negative;
-    if (!run_film_for(session, source, negative, progress, error)) return false;
+    if (!run_film_for(session, source, negative, progress, error, state.film_seed)) return false;
     state.applied_ev = session->pipeline->last_auto_exposure_ev();
     session->pipeline->overscan_frame(state.overscan_frame_w, state.overscan_frame_h);
     if (progress) progress->auto_exposure_ev = state.applied_ev;
@@ -1119,6 +1123,7 @@ bool negative_for(spk_session* session, const Tier& tier, Progress* progress, Im
     // tier it is the second 1.22 GB plane.
     kept.buf = gpu->cache_negative(negative.buf, negative.bytes(), error);
     if (!kept.buf) return false;
+    state.film_seed = session->pipeline->last_film_seed();
     state.negative = kept;
     state.has_negative = true;
     out = kept;
@@ -1172,7 +1177,7 @@ bool materialise(spk_session* session, const Image& rgb, spk_result* out, std::s
 }
 
 spk_status render_tier(spk_session* session, const char* tier_name, bool use_reprint,
-                       spk_result* out
+                       spk_result* out, std::function<bool()> interrupted = {}
 #ifdef _WIN32
                        , gpu::D3D11Publication* display = nullptr, bool retainExact = false, bool fallback = false
 #endif
@@ -1191,6 +1196,7 @@ spk_status render_tier(spk_session* session, const char* tier_name, bool use_rep
     gpu::Gpu* gpu = session->engine->gpu;
     const auto started = std::chrono::steady_clock::now();
     session->progress = Progress{};
+    session->progress.interrupted = std::move(interrupted);
     session->progress.progress_id = "p" + std::to_string(next_id());
     // Opt-in, because turning it on serialises every node. See Progress.
     session->progress.detailed = std::getenv("SPEKTRAFILM_NODE_TIMINGS") != nullptr;
@@ -1202,12 +1208,13 @@ spk_status render_tier(spk_session* session, const char* tier_name, bool use_rep
     session->progress.memory_pressure_critical = gpu->take_critical_pressure();
     std::string error;
     const bool had_negative = session->tiers[tier->name].has_negative;
-    if (!use_reprint && had_negative) {
+    if (!use_reprint) {
         // `spk_render` is the `preview_render(layer: "shoot")` path: it exists
         // to force the film side to run. Without this it returned the cached
         // negative and was identical to `spk_reprint` in everything but the
         // flag it reported -- which happened to look right, because a
         // shoot-layer `set_params` drops the negative before this is reached.
+        session->tiers[tier->name].film_seed.reset();
         session->tiers[tier->name].negative = Image{};
         session->tiers[tier->name].has_negative = false;
     }
@@ -1303,13 +1310,28 @@ spk_status spk_render(spk_session* session, const char* tier, spk_result* out) {
 
 }  // extern "C"
 
+void spk::discard_tier_cache(spk_session* session) {
+    std::lock_guard guard(session->lock);
+    for (auto& [name, state] : session->tiers) {
+        state.image = {};
+        state.negative = {};
+        state.has_negative = false;
+    }
+}
+
+spk_status spk::render_interruptible(spk_session* session, const char* tier, bool reprint, spk_result* out,
+                                     std::function<bool()> interrupted) {
+    return render_tier(session, tier, reprint, out, std::move(interrupted));
+}
+
 #ifdef _WIN32
 spk_status spk::gpu::render_d3d11(spk_session* session, const char* tier, bool reprint,
-                                  D3D11Publication& display, spk_result& metadata, bool retainExact, bool fallback) {
+                                  D3D11Publication& display, spk_result& metadata, bool retainExact, bool fallback,
+                                  std::function<bool()> interrupted) {
     display.texture.reset();
     display.project = {};
     display.readPixels = {};
-    return render_tier(session, tier, reprint, &metadata, &display, retainExact, fallback);
+    return render_tier(session, tier, reprint, &metadata, std::move(interrupted), &display, retainExact, fallback);
 }
 #endif
 
@@ -1848,6 +1870,7 @@ spk_status spk_set_params(spk_session* session, const char* params_delta_json, c
 
     if (shoot || (stock_change && delta.has("film_stock"))) {
         for (auto& kv : session->tiers) {
+            kv.second.film_seed.reset();
             if (kv.second.has_negative) {
                 // Dropping the handle is the whole of it: the buffer goes back
                 // to the pool for the film side to reuse on the re-render.

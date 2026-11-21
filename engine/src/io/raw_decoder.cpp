@@ -277,9 +277,14 @@ bool supported_headroom_source(LibRaw& raw, std::string& error) {
     return true;
 }
 
+// LibRaw checks the progress callback in demosaic and its cancel flag in unpack.
+int raw_progress(void* context, LibRaw_progress, int, int) {
+    return static_cast<const std::stop_token*>(context)->stop_requested() ? 1 : 0;
+}
+
 class HeadroomLibRaw final : public LibRaw {
 public:
-    HeadroomLibRaw() : LibRaw(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK) {}
+    explicit HeadroomLibRaw(std::stop_token stop) : LibRaw(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK), stop_(stop) {}
 
     std::vector<float> converted;
     std::uint32_t converted_width = 0, converted_height = 0;
@@ -288,6 +293,9 @@ public:
     double conversion_ms = 0.0;
     bool conversion_finished = false;
     std::string conversion_error;
+
+private:
+    std::stop_token stop_;
 
 protected:
     void convert_to_rgb_loop(float out_cam[3][4]) override {
@@ -309,7 +317,7 @@ protected:
         conversion_finished = detail::convert_camera_rgb_headroom(
             imgdata.image[0], std::size_t(sizes.width) * sizes.height,
             sizes.width, sizes.height, sizes.flip, matrix, exposure_restore,
-            converted, converted_width, converted_height, conversion_error);
+            converted, converted_width, converted_height, conversion_error, stop_);
         conversion_ms = elapsed_ms(start);
         // dcraw_process may continue its bookkeeping; no clipped uint16 output
         // is subsequently used, and the supported square-pixel Bayer inputs
@@ -325,7 +333,7 @@ bool decode_raw_compatible(const std::filesystem::path& source,
 }
 
 bool decode_raw_compatible(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                           DecodedRaw& out, std::string& error) {
+                           DecodedRaw& out, std::string& error, std::stop_token stop) {
     error.clear();
     const auto total_start = Clock::now();
     try {
@@ -363,6 +371,9 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
         decoded.metadata.lens_profile = embedded_profile(*raw, exif);
 
         start = Clock::now();
+        if (stop.stop_possible()) raw->set_progress_handler(&raw_progress, &stop);
+        std::stop_callback cancel(stop, [&] { raw->setCancelFlag(); });
+        if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
         const int unpack_status = raw->unpack();
         decoded.timings.unpack_ms = elapsed_ms(start);
         if (!libraw_ok(unpack_status, "RAW unpack", error)) return false;
@@ -374,6 +385,7 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
         if (const char* name = raw->unpack_function_name()) decoded.metadata.decoder_name = name;
 
         start = Clock::now();
+        if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
         const int process_status = raw->dcraw_process();
         decoded.timings.process_ms = elapsed_ms(start);
         if (!libraw_ok(process_status, "RAW process", error)) return false;
@@ -403,6 +415,7 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
 
         // This also performs LibRaw's final orientation and identity gamma
         // lookup. Reading imgdata.image directly would omit those semantics.
+        if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
         start = Clock::now();
         int image_status = LIBRAW_SUCCESS;
         using ImagePtr = std::unique_ptr<libraw_processed_image_t,
@@ -431,12 +444,16 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
                 table[v] = static_cast<float>(static_cast<double>(v) / 65535.0);
             return table;
         }();
-        for (std::size_t i = 0; i < decoded.rgb.size(); ++i) {
-            std::uint16_t value;
-            // LibRaw returns native-endian 16-bit samples. memcpy avoids
-            // imposing alignment or aliasing assumptions on its byte array.
-            std::memcpy(&value, image->data + i * sizeof(value), sizeof(value));
-            decoded.rgb[i] = code_to_float[value];
+        for (std::size_t y = 0; y < decoded.height; ++y) {
+            if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
+            const auto end = (y + 1) * decoded.width * 3;
+            for (std::size_t i = y * decoded.width * 3; i < end; ++i) {
+                std::uint16_t value;
+                // LibRaw returns native-endian 16-bit samples. memcpy avoids
+                // imposing alignment or aliasing assumptions on its byte array.
+                std::memcpy(&value, image->data + i * sizeof(value), sizeof(value));
+                decoded.rgb[i] = code_to_float[value];
+            }
         }
         decoded.timings.convert_ms = elapsed_ms(start);
         decoded.timings.total_ms = elapsed_ms(total_start);
@@ -457,7 +474,7 @@ bool decode_raw_headroom(const std::filesystem::path& source,
 }
 
 bool decode_raw_headroom(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                         DecodedRaw& out, std::string& error) {
+                         DecodedRaw& out, std::string& error, std::stop_token stop) {
     error.clear();
     const auto total_start = Clock::now();
     try {
@@ -465,7 +482,7 @@ bool decode_raw_headroom(const std::filesystem::path& source, const std::array<f
             error = "RAW open: source path is empty";
             return false;
         }
-        auto raw = std::make_unique<HeadroomLibRaw>();
+        auto raw = std::make_unique<HeadroomLibRaw>(stop);
         configure_compatible(raw->imgdata.params);
         // LibRaw's Ignore mode prevents WB multipliers above one, but does not
         // reconstruct sensor saturation and still uses uint16 intermediates.
@@ -495,6 +512,9 @@ bool decode_raw_headroom(const std::filesystem::path& source, const std::array<f
         decoded.metadata.lens_profile = embedded_profile(*raw, exif);
 
         start = Clock::now();
+        if (stop.stop_possible()) raw->set_progress_handler(&raw_progress, &stop);
+        std::stop_callback cancel(stop, [&] { raw->setCancelFlag(); });
+        if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
         const int unpack_status = raw->unpack();
         decoded.timings.unpack_ms = elapsed_ms(start);
         if (!libraw_ok(unpack_status, "RAW unpack", error)) return false;
@@ -507,6 +527,7 @@ bool decode_raw_headroom(const std::filesystem::path& source, const std::array<f
         if (const char* name = raw->unpack_function_name()) decoded.metadata.decoder_name = name;
 
         start = Clock::now();
+        if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
         const int process_status = raw->dcraw_process();
         const double process_and_conversion_ms = elapsed_ms(start);
         decoded.timings.process_ms = std::max(0.0, process_and_conversion_ms - raw->conversion_ms);

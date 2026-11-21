@@ -147,7 +147,7 @@ bool decode_flat(const std::filesystem::path& source, io::DecodedRaw& out, std::
 }  // namespace
 
 bool decode_raw(const std::filesystem::path& source, DecodeMode mode, const RenderSettings& settings,
-                io::DecodedRaw& out, std::string& error) {
+                io::DecodedRaw& out, std::string& error, std::stop_token stop) {
     // A flat file has no camera to balance and one decode (header above).
     if (flat_file(source)) return decode_flat(source, out, error);
     const WhiteBalance wb = white_balance(settings);
@@ -171,8 +171,8 @@ bool decode_raw(const std::filesystem::path& source, DecodeMode mode, const Rend
         user = &mul;
         header_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     }
-    const bool ok = mode == DecodeMode::headroom ? io::decode_raw_headroom(source, user, out, error)
-                                                 : io::decode_raw_compatible(source, user, out, error);
+    const bool ok = mode == DecodeMode::headroom ? io::decode_raw_headroom(source, user, out, error, stop)
+                                                 : io::decode_raw_compatible(source, user, out, error, stop);
     // The header read is part of opening the file, and is reported as such.
     if (ok) {
         if (std::get<bool>(settings.get("lens_correction"))) {
@@ -183,7 +183,8 @@ bool decode_raw(const std::filesystem::path& source, DecodeMode mode, const Rend
                 error = "Invalid saved lens profile";
                 return false;
             }
-            io::apply_lens_profile(out, record.empty() ? out.metadata.lens_profile : imported);
+            io::apply_lens_profile(out, record.empty() ? out.metadata.lens_profile : imported, stop);
+            if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
             const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
             out.timings.convert_ms += ms;
             out.timings.total_ms += ms;

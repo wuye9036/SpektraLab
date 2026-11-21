@@ -51,6 +51,7 @@ DisplayTexture make_d3d11_display(Gpu& gpu, Buffer* rgb, uint32_t width, uint32_
                                    const DisplayGeometry* geometry = nullptr);
 spk_status render_d3d11(spk_session* session, const char* tier, bool reprint,
                         D3D11Publication& publication, spk_result& metadata,
-                        bool retainExactPixels = false, bool allowHostFallback = false);
+                        bool retainExactPixels = false, bool allowHostFallback = false,
+                        std::function<bool()> interrupted = {});
 }
 #endif

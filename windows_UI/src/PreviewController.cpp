@@ -356,6 +356,7 @@ QVariant PreviewController::nativeWhole() const {
 }
 
 PreviewController::~PreviewController() {
+    balance_stop_.request_stop();
     // The preview readers post to this object: none may still be running
     // when it goes (a reply already queued is dropped with the object).
     if(preview_pool_){preview_pool_->clear();preview_pool_->waitForDone();}
@@ -420,17 +421,19 @@ void PreviewController::renderFull() {
     if(!live_development_||!frame_||frame_->full_tier||frame_->pair||busy_||dialog_open_||dirty())return;
     const auto s=frame_->settings;const auto shown=frame_;const auto gen=++generation_;const auto revision=settings_revision_.load();
     const auto factory=image_factory_;const auto geometry=geometry_;
+    if (shown->white_balance_draft) balance_stop_=std::stop_source{};
+    const auto stop=shown->white_balance_draft ? balance_stop_.get_token() : std::stop_token{};
+    const bool releasedBalance=shown->white_balance_draft && !drag_id_ && released_revision_==revision;
     full_job_=true;
-    submit([this,s,shown,gen,revision,factory,geometry](auto& host){Reply r;r.generation=gen;r.settings_revision=revision;r.operation="render";r.geometry=geometry;
+    submit([this,s,shown,gen,revision,factory,geometry,stop,releasedBalance](auto& host){Reply r;r.generation=gen;r.settings_revision=revision;r.operation="render";r.geometry=geometry;
         try {
             const auto active=host.current();
             // Refine only while the worker still holds this photograph.
             if(!active||active->source!=shown->source||active->decode_mode!=shown->decode_mode)
                 throw desktop::RenderCancelled();
-            // Replace the draft with the exact RAW live frame first, as on
-            // an ordinary open. Its full tier follows on the same session.
-            const auto tier=shown->white_balance_draft?desktop::Tier::live:desktop::Tier::full;
-            r.frame=host.render(s,shown->geometry,tier);
+            if (!shown->white_balance_draft) r.preceding_raw_decode_ms=shown->timings.raw_decode_ms;
+            const auto tier=shown->white_balance_draft && !releasedBalance ? desktop::Tier::live : desktop::Tier::full;
+            r.frame=host.render(s,shown->geometry,tier,desktop::FrameUse::display,stop);
             if(settings_revision_.load()==revision)r.publication=publish(factory,r.frame,geometry);
         }catch(const desktop::RenderCancelled&){r.frame=nullptr;r.cancelled=true;}
         catch(const std::exception& e){
@@ -651,8 +654,16 @@ void PreviewController::accept(Reply reply) {
         if(!failed_) {
             if (!dragging) restoreSettings();
             if (!dragging || frame_->full_tier) updateThumbnail();
-            status_=uiText(!frame_->full_tier?"status.renderedPreview":frame_->reprint()?"status.renderedReusedNegative":"status.rendered",
-                           {QString::number(frame_->timings.render_ms/1000,'f',2)});
+            const auto seconds=[](double ms){ return QString::number(ms/1000,'f',2); };
+            QStringList stages;
+            if (frame_->metadata.camera_raw && !frame_->pair) {
+                const double rawMs=frame_->timings.raw_decode_ms+reply.preceding_raw_decode_ms;
+                stages << (rawMs>0 ? uiText("status.rawDecodeTime",{seconds(rawMs)}) : uiText("status.rawReused"));
+            }
+            stages << uiText(!frame_->full_tier?"status.renderedPreview":frame_->reprint()?"status.renderedReusedNegative":"status.rendered",
+                             {seconds(frame_->timings.render_ms)})
+                   << uiText("status.displayPrepTime",{seconds(publish_ms_)});
+            status_=stages.join(QStringLiteral("  ·  "));
             // The frame lands with its picture: frameChanged then comes from
             // the picture made again, so the canvas never pairs the new
             // frame's scale with the last picture.
@@ -874,6 +885,7 @@ void PreviewController::acceptOriginal(Reply reply) {
     emit originalChanged();
 }
 void PreviewController::settingsEdited() {
+    balance_stop_.request_stop();
     const auto revision = ++settings_revision_;
     if (!drag_id_ && live_development_ && gesture_index_ >= 0 &&
         gesture_key_ != "straightenDegrees" && !pairActive())
@@ -1077,6 +1089,7 @@ void PreviewController::openRaw(const QUrl& url) {
     openItem(index);
 }
 void PreviewController::openItem(int index) {
+    balance_stop_.request_stop();
     endEditGesture();
     released_revision_ = 0;
     // Leaving a photograph keeps its picture; the next shows its own at once.
@@ -1105,7 +1118,9 @@ void PreviewController::apply() {
     const bool released = released_revision_ && released_revision_ == revision;
     const bool live = live_development_;
     const bool allowBalancePreview = live && !original_wanted_;
-    submit([this,s,shown,gen,revision,mode,factory,geometry,cut,live,released,drag,allowBalancePreview](auto& host){Reply r;r.generation=gen;r.settings_revision=revision;r.drag_id=drag;r.operation="render";r.geometry=geometry;
+    balance_stop_=std::stop_source{};
+    const auto stop=balance_stop_.get_token();
+    submit([this,s,shown,gen,revision,mode,factory,geometry,cut,live,released,drag,allowBalancePreview,stop](auto& host){Reply r;r.generation=gen;r.settings_revision=revision;r.drag_id=drag;r.operation="render";r.geometry=geometry;
         try {
             // Publication can fail after a successful worker open (for example,
             // a display allocation failure). Reconcile against the image the
@@ -1115,11 +1130,15 @@ void PreviewController::apply() {
             const bool needsDecode=!sameSession||!desktop::same_decode(active->settings,s);
             auto tier=live&&(!released||needsDecode)?desktop::Tier::live:desktop::Tier::full;
             if(allowBalancePreview && sameSession && needsDecode) tier=desktop::Tier::white_balance_preview;
-            r.frame=sameSession?host.render(s,cut,tier):host.open_raw(shown->source,mode,s,cut,tier);
+            if (needsDecode)
+                r.frame=sameSession ? host.render(s,cut,tier,desktop::FrameUse::display,stop)
+                                    : host.open_raw(shown->source,mode,s,cut,tier,desktop::FrameUse::display,stop);
+            else r.frame=host.render(s,cut,tier);
             // accept() drops a superseded result unseen; converting 33 MP
             // for it would only delay the render that replaces it.
             if(drag || settings_revision_.load()==revision)r.publication=publish(factory,r.frame,geometry);
-        }catch(const std::exception& e){r.frame=nullptr;r.error=text(e.what());}return r;},uiText("status.rendering"),"render");
+        }catch(const desktop::RenderCancelled&){r.frame=nullptr;r.cancelled=true;}
+        catch(const std::exception& e){r.frame=nullptr;r.error=text(e.what());}return r;},uiText("status.rendering"),"render");
 }
 void PreviewController::exportTiff(const QUrl& url) {
     exportImage(url,0,95,0);

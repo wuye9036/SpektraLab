@@ -255,7 +255,7 @@ canvas or the strip do the same. A TIFF, JPEG or PNG is decoded at the door
 (`engine/src/desktop/raw_white_balance.hpp`): its ICC profile, else sRGB for an
 8-bit file and linear ProPhoto for an untagged 16-bit/float TIFF, as the Mac's
 `ImageDecoder` assumes, into the engine's scene-linear input; it has no camera
-white balance or RAW decode to choose, and Photo Info says what it was read as.
+white balance or RAW decode to choose.
 Each thumbnail is the whole photograph with everything outside its crop under
 a nearly opaque mask, turned and flipped as the canvas is
 (`CropMaskedThumbnail.swift`); until a photo has been rendered it is the file's
@@ -326,7 +326,8 @@ sent to the engine by its wire name; new photos take the macOS defaults.
 - **Tone Mask** (the contrast mask, RFC-024): Enable, Highlights, Shadows,
   Core and Radius with the mask's curve. The Mac hides it behind a feature
   flag; Windows shows it, folded, because the engine carries it.
-- **Photo Info**.
+
+The footer reports RAW decode or reuse, render time and display preparation time.
 
 On the left rail, **Enlarger** has the print exposure (-3..3 stops), the
 yellow and magenta filters and pre-flash, and **Print** the paper, its

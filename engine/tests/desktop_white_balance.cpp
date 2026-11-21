@@ -9,6 +9,7 @@
 // row-normalised pseudoinverse against sRGB as cam_xyz_coeff builds it, and
 // the decoded value camera_to_output . (multipliers ⊙ camera response).
 #include "desktop/preview_host.hpp"
+#include "pipeline/render_request.hpp"
 #include "desktop/raw_white_balance.hpp"
 #include "../host/white_balance.hpp"
 
@@ -234,16 +235,29 @@ void sampler() {
     check(!sample_decoded(decoded, 0.15, 0.9375, 0, rgb, error), "a black sample was used");
 }
 
+bool same_pixels(const FramePtr& a, const FramePtr& b) {
+    if (a->width()!=b->width() || a->height()!=b->height()) return false;
+    const auto& x=a->pixels();
+    const auto& y=b->pixels();
+    for (unsigned row=0;row<a->height();++row) {
+        const auto* left=x.rgba16+size_t(row)*x.row_stride_px*4;
+        const auto* right=y.rgba16+size_t(row)*y.row_stride_px*4;
+        if (!std::equal(left,left+size_t(a->width())*4,right)) return false;
+    }
+    return true;
+}
+
 // --raw <resources> <RAW>: the same through PreviewHost on a real file. A
 // white balance re-decodes (a new negative, decode time spent) and nothing
 // else does; As Shot restores the camera's multipliers exactly; and a picked
 // point of the decoded frame is grey after the pick's own re-decode.
 void raw_file(const std::filesystem::path& resources, const std::filesystem::path& raw) {
     HostOptions options;
-    options.preview_long_edge = 1280;
+    options.preview_long_edge = 2560;
     PreviewHost host(resources, options);
     RenderSettings settings;
     settings.grain_active = false;
+    settings.glare_active = false;
     const FramePtr shot = host.open_raw(raw, DecodeMode::compatible16, settings);
     double as_k = 0, as_tint = 0;
     check(as_shot_white_balance(shot->metadata, as_k, as_tint), "the RAW's camera has no white balance matrix");
@@ -253,14 +267,28 @@ void raw_file(const std::filesystem::path& resources, const std::filesystem::pat
     RenderSettings warm = settings;
     set_white_balance(warm, {"custom", 3200.0, 0.0});
     const auto draft = host.render(warm, {}, Tier::white_balance_preview);
+    check(shot->timings.raw_decode_ms > 0 && draft->timings.raw_decode_ms == 0,
+          "RAW timing did not distinguish a fresh read from a draft");
     check(draft->white_balance_draft && !draft->full_tier && host.current() == shot &&
           draft->logicalWidth() == shot->width() && draft->logicalHeight() == shot->height(),
           "white-balance drag replaced the exact decode or changed the canvas dimensions");
+    std::stop_source superseded;
+    superseded.request_stop();
+    bool cancelled = false;
+    try { host.render(warm, {}, Tier::full, FrameUse::display, superseded.get_token()); }
+    catch (const RenderCancelled&) { cancelled = true; }
+    check(cancelled && host.current() == shot, "retired white balance replaced the current frame");
     const FramePtr tungsten = host.render(warm);
     check(!tungsten->reprint() && !tungsten->negative_was_cached() && tungsten->timings.decode_ms > 0,
           "a white balance did not re-decode and develop a new negative");
     check(tungsten->metadata.post_scale_pre_mul != shot->metadata.post_scale_pre_mul,
           "the decoder applied the camera's multipliers for 3200 K");
+    if (shot->width() > options.preview_long_edge || shot->height() > options.preview_long_edge) {
+        const auto live = host.open_raw(raw, DecodeMode::compatible16, warm, {}, Tier::live);
+        const auto staged = host.render(warm, {}, Tier::full);
+        check(!live->full_tier && same_pixels(tungsten,staged),
+              "full white-balance codes depend on the intermediate tier");
+    }
     std::printf("raw: 3200 K re-decode %.0f ms (open incl. header read %.1f ms), render %.0f ms\n",
                 tungsten->timings.decode_ms, tungsten->decode_timings.open_ms, tungsten->timings.render_ms);
     RenderSettings brighter = warm;
@@ -290,6 +318,15 @@ void raw_file(const std::filesystem::path& resources, const std::filesystem::pat
     check(chroma_of(after) < 0.01 && (chroma_of(before) < 0.02 || chroma_of(after) < chroma_of(before)),
           "the picked white balance did not neutralise the picked point");
     (void)neutral;
+
+    // A cancelled replacement can lead back to a print edit on the old session.
+    // Recreating an evicted negative must retain that photograph's grain pattern.
+    auto grain = picked;
+    grain.grain_active = true;
+    const auto original_grain = host.render(grain, {}, Tier::live);
+    spk::discard_tier_cache(host.session());
+    const auto recovered_grain = host.render(grain, {}, Tier::live);
+    check(same_pixels(original_grain,recovered_grain), "tier eviction changed the grain of the old negative");
 
     // The headroom policy takes the same white balance (its multipliers
     // normalised by their largest, as LibRaw does there) and the picker reads
