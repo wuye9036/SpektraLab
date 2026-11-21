@@ -1,23 +1,9 @@
-# Windows Qt Quick editor
+# SpektrafilmWinApp build and editor guide
 
-This is a native Qt Quick/C++ application using the existing synchronous
-`spk_desktop_host` and the engine's Vulkan backend. There is no Python, Node,
-browser or subprocess renderer at runtime. The interface is the macOS app's
-(below); the few controls whose feature is not on Windows keep their place
-greyed and say why on hover, rather than being omitted. What it adds
-relative to upstream's starting point is summarised in
-[CHANGES-WINDOWS.md](CHANGES-WINDOWS.md); the comparison with the Mac, row by
-row, is [DESIGN_ALIGNMENT.md](DESIGN_ALIGNMENT.md).
-
-In brief: RAW (LibRaw 0.22.2), TIFF, JPEG and PNG input; a library with the
-Mac's filmstrip and Settings Clipboard; the Pre-Dev rail (white balance,
-Process, Latitude, Scene Placement, Tone Mask, film format and effects,
-enlarger); Film Edge and Date Back; half-frame pairs; the Post-Dev grade;
-canvas tools (zoom ladder, histogram, Original, before/after, crop grips);
-the Mac's export page with its recipes and colour spaces; a ProPhoto RGB
-working space; display colour management per monitor with a soft proof and
-gamut warning; Settings and About windows; English interface text through a
-JSON Localizer.
+SpektrafilmWinApp is an independently maintained Windows darkroom. The Qt Quick
+editor links the C++ desktop host and Vulkan renderer in the same process.
+For a first print and a tour of the Windows features, see the [project overview](../README.md).
+This guide covers the toolchain, package layout, editing controls and validation.
 
 ## Build (MSVC 2022)
 
@@ -75,7 +61,7 @@ neither is shipped.
 | `-VsDevCmd` | path to `VsDevCmd.bat` (the default is the development machine's; pass yours) |
 | `-QtDirectory` | a Qt other than `<deps>/qt-6.11.3-msvc2022_64` |
 | `-Configuration` | `Release` (default), `RelWithDebInfo` or `Debug` |
-| `-RunTests` | build every target and run CTest; without it only `SpektraLabQt` is built |
+| `-RunTests` | build every target and run CTest; without it only `SpektrafilmWinApp` is built |
 | `-Package` | after a successful Release build and deploy (and the tests, with `-RunTests`), write the zip below |
 | `-Installer` | `-Package`, then the installer below from the same folder |
 | `-InnoSetupCompiler` | an `ISCC.exe` other than `<deps>/InnoSetup6/ISCC.exe` |
@@ -89,7 +75,7 @@ With `-RunTests`, `TEMP`/`TMP` point into `<build>/tmp` so every test's scratch
 file stays in the build tree.
 
 **The app folder.** `<build>/app` is self-contained for x64 Windows:
-`SpektraLabQt.exe`, the Qt DLLs, plugins and QML that `windeployqt` chose
+`SpektrafilmWinApp.exe`, the Qt DLLs, plugins and QML that `windeployqt` chose
 (plus `platforms/qoffscreen.dll` for `--self-test` and `--snapshot`), the MSVC
 runtime DLLs from Visual Studio's redistributable folder, `resources/` (the
 engine's baked data, SPIR-V kernels, spektrafilm's profiles beside the
@@ -99,8 +85,8 @@ Digital Intermediate's view LUTs) and `licenses/` (every notice:
 it. The Vulkan driver is the machine's own.
 
 **The package.** `-Package` copies that folder into
-`<build>/package/SpektraLab-Windows-<version>-x64/` and zips it to
-`<build>/package/SpektraLab-Windows-<version>-x64.zip`, the version being the
+`<build>/package/SpektrafilmWinApp-v<version>-x64/` and zips it to
+`<build>/package/SpektrafilmWinApp-v<version>-x64.zip`, the version being the
 About window's (`SPEKTRALAB_VERSION` in `CMakeLists.txt`). Left out:
 `vc_redist.x64.exe` (the runtime DLLs are already beside the executable),
 debug and link artefacts, test executables and anything personal (edit
@@ -108,19 +94,19 @@ records, folder orders, preferences and recipes, which live under the user's
 `AppData`, never in `app/`). It refuses to package unless the executable, the
 Qt and runtime DLLs, the platform plugin, the QML, the engine resources,
 fonts, B&W profiles and the licence texts are there. The zip has one top
-folder; unzip it anywhere and run `SpektraLabQt.exe`. It is a development
+folder; unzip it anywhere and run `SpektrafilmWinApp.exe`. It is a development
 build and unsigned. On 2026-10-16 (1.3.3) it was
 51.6 MB and 1654 files, and ran from a fresh extraction
 ([CHANGES-WINDOWS.md](CHANGES-WINDOWS.md#packaging)).
 
 **The installer.** `-Installer` packages as above, then compiles
-[installer/SpektraLab.iss](installer/SpektraLab.iss) with Inno Setup 6 from
+[installer/SpektrafilmWinApp.iss](installer/SpektrafilmWinApp.iss) with Inno Setup 6 from
 the same staged folder into
-`<build>/package/SpektraLab-Windows-<version>-x64-Setup.exe`. It installs for
+`<build>/package/SpektrafilmWinApp-v<version>-x64-Setup.exe`. It installs for
 the current user without administrator rights
-(`%LOCALAPPDATA%\Programs\SpektraLab`) or, if chosen on its first page, for
+(`%LOCALAPPDATA%\Programs\SpektrafilmWinApp`) or, if chosen on its first page, for
 all users (`Program Files`); adds a Start menu shortcut, an optional desktop
-one and an uninstaller; and asks a running SpektraLab to close first. An
+one and an uninstaller; and asks a running SpektrafilmWinApp to close first. An
 upgrade replaces `qml/`, `resources/` and `licenses/` whole. Uninstalling
 leaves the edits, folder orders, recipes and preferences in `AppData`. The
 setup is unsigned, so SmartScreen warns on first run. Inno Setup is a build
@@ -155,7 +141,7 @@ $env:QT_QPA_PLATFORM = 'offscreen'; $env:QT_QUICK_BACKEND = 'software'
 $env:QML_DISABLE_DISK_CACHE = '1'; $env:QSG_RHI_DISABLE_DISK_CACHE = '1'
 $env:PATH = "<build>\app;$env:PATH"; $env:QT_PLUGIN_PATH = "<build>\app"
 # The real executable: QML, controller and engine (output directory must be new)
-Start-Process <build>\app\SpektraLabQt.exe -Wait -NoNewWindow -ArgumentList `
+Start-Process <build>\app\SpektrafilmWinApp.exe -Wait -NoNewWindow -ArgumentList `
     '--open', 'C:\photos\supported.ARW', '--reject', 'C:\photos\rejected.NEF', `
     '--self-test', 'C:\validation\self-test'
 # Library, editing and export workflows: <resources> <RAW> <rejected RAW> <new dir>
@@ -174,7 +160,7 @@ Start-Process <build>\app\SpektraLabQt.exe -Wait -NoNewWindow -ArgumentList `
     C:\photos\supported.ARW C:\validation\geometry-bench
 ```
 
-`SpektraLabQt.exe` is a GUI-subsystem executable, hence `Start-Process
+`SpektrafilmWinApp.exe` is a GUI-subsystem executable, hence `Start-Process
 -Wait`; it exits nonzero on failure and writes a JSON report and its captures.
 What each gate checks is under [Validation](#validation).
 
@@ -794,16 +780,14 @@ Explorer. Every Mac setting without a Windows backend is shown greyed with the
 reason under it, nothing invented: fast stock preview, DI
 blue compensation, crop re-maps, decouple effects, the memory and disk-cache
 readouts and caps, log level, per-node timings, job logs, log retention, the
-diagnostic bundle, the update check and agent access (the `spektralab` CLI
-and MCP server are macOS-only). Preferences are `app-settings.json` beside the
+diagnostic bundle and agent access. General links to the Windows project’s releases on GitHub. Preferences are `app-settings.json` beside the
 edit store. It also keeps where each file dialog was last accepted
 (`dialog.<kind>.folder`: Open and Open Folder share one, the export folder and
 the Open With application each have their own), and every opening makes a
 new dialog (`RememberedDialog.qml`), because Qt applies a dialog's starting
 folder on its first show only.
 
-**About** (`AboutWindow.swift`): name, version (the Mac's `MARKETING_VERSION`,
-`SPEKTRALAB_VERSION` in `CMakeLists.txt`), engine build (`spk_build_info`), Qt
+**About** (`AboutWindow.swift`): name, version (`SPEKTRALAB_VERSION` in `CMakeLists.txt`), engine build (`spk_build_info`), Qt
 and compiler, the canvas's graphics adapter, the credits in the form CC BY-SA
 asks for, the GPL's written offer with the source URL, and every text in the
 deployed `licenses/` folder in a viewer, read from the files; a text the build

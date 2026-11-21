@@ -372,3 +372,4 @@ desktop/playwright-report/
 desktop/src-tauri/tauri.bundle.json
 
 testdata/
+/_build/

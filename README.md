@@ -1,162 +1,30 @@
-# SpektraLab
+# SpektrafilmWinApp
 
-**English** · [简体中文](README.zh-CN.md) · [spektralab.app](https://spektralab.app)
+**English** · [简体中文](README.zh-CN.md)
 
-A film and print simulator for macOS. Open a RAW, pick a film and a paper,
-and get a physically modelled print — grain, halation, couplers, the enlarger's
-filter pack — in about a second.
+SpektrafilmWinApp is a digital darkroom for Windows. Its spectral model follows light through film and photographic paper to simulate the development and printing of RAW, TIFF, JPEG and PNG photographs.
 
-![SpektraLab: Lower Manhattan on Kodak Portra 160, printed on Kodak Vision 2383](screenshots/Screenshot_English.png)
+This is an independently developed and maintained fork of [SpektraLab](https://github.com/JamesQiu2005/SpektraLab). The Windows editor and its releases live in this repository.
 
-- **Spectral, not a LUT.** Light is traced through 81 wavelengths, the film's
-  dye layers and the paper's, the way a darkroom does it.
-- **Physical units.** Tell it the negative is 120 or 35 mm and the grain,
-  halation and coupler diffusion scale with the frame in micrometres.
-- **Fast.** A C++ Metal engine compiled into the app: a 45 MP reprint in
-  ~0.01 s at preview size, a full-resolution render in under a second.
-- **One colour pipeline.** ProPhoto RGB throughout; each export is gamut-mapped
-  once into the space you ask for, and proofed before it is written.
-- **The film itself.** Film Edge prints the frame on its own strip — rebate,
-  perforations, each stock's edge print and frame numbers, measured on real
-  strips — in 135, half frame, XPan, 645 to 6×9, 6×12 and 6×17. Date Back
-  exposes a date onto the negative.
-- **Half-frame pairs.** Two frames on one piece of film, side by side or one
-  above the other, each with its own exposure, white balance, print and grade.
-- **Scriptable.** `spektralab` (CLI) and an MCP server drive the same session
-  the window does. Off until enabled in Settings.
+![A night waterfront developed in the Windows editor with Kodak Portra 400](screenshots/windows-darkroom-en.jpg)
 
-| RAW decode ⟷ film and paper (⌥\\) | grain at 1:1 |
-|---|---|
-| ![Before and after](screenshots/natural_halation.png) | ![Grain at 1:1](screenshots/physically_accurate_grain.png) |
+*Night waterfront from `7IV05987.ARW`, photographed by wuye9036. Developed with Kodak Portra 400 on Kodak Professional Supra Endura, film exposure −2 EV and Print EDR enabled. The photograph and its rendition are licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).*
 
-## Install
+## Features
 
-Download the DMG from [spektralab.app](https://spektralab.app) or
-[Releases](https://github.com/JamesQiu2005/SpektraLab/releases), open it and
-drag SpektraLab to Applications. It is signed with a Developer ID and
-notarised by Apple, so it opens like any other app.
+- **Redesigned highlights, shadows and contrast.** On the finished print, highlight and shadow adjustments use local brightness to preserve detail within bright and dark regions. The contrast curve holds black, middle grey and paper white in place, keeping fine tonal differences visible near both ends of the scale.
+- **Fully GPU-accelerated rendering and preview.** Vulkan runs the spectral film and paper simulation. The Windows preview shares the rendered image directly with Direct3D 11, keeping print grading, histogram analysis and display colour conversion on the GPU.
+- **Highlight and shadow adjustments before development.** Bright and dark regions of the scene can each be adjusted by up to two stops before film exposure. This makes room for bright lamps or brings out texture in a shaded foreground while preserving detail within each region.
+- **Four interface languages.** English, Simplified Chinese, Japanese and Spanish cover the editing controls, settings and in-app explanations.
 
-Apple silicon, macOS 15 or later.
+The editor supports colour negatives, slide film and black-and-white stocks, with grain and halation scaled to the film format. RAW white-balance previews and lens correction, film edges, date imprints and half-frame pairs round out the darkroom tools. Print EDR brings out additional highlight detail on calibrated papers. The ProPhoto RGB workflow includes per-monitor colour management, soft proofing and batch export.
 
-Releases before 1.3.3 are ad-hoc signed. For one of those, clear the
-quarantine once:
+## Windows release
 
-```bash
-xattr -d -r com.apple.quarantine /Applications/SpektraLab.app
-```
+**v1.0** starts the independent SpektrafilmWinApp release series. The x64 installer and portable ZIP require 64-bit Windows and a Vulkan-capable graphics driver. [Releases](https://github.com/wuye9036/SpektraLab/releases) · [Windows build guide](windows_UI/README.md#build-msvc-2022)
 
-## Select and sync photos
+## Credits and licences
 
-Click a photo to make it the current photo, then Command-click other photos to
-add or remove them without moving the current photo. Command+A (Edit → Select
-All Photos) selects the library and keeps the current photo as the sync source.
-In a newly opened folder it opens the first photo. Command+A inside a text field
-still selects text.
+The application and engine are [GPL-3.0-or-later](license/LICENSE). Hanze Qiu and the SpektraLab contributors developed the upstream application and native engine. Andrea Volpato’s [spektrafilm](https://github.com/andreavolpato/spektrafilm) supplies the film and print model, the 28 colour profiles and the print LUTs. Those profiles and LUTs retain their [CC BY-SA 4.0 licence](license/SPEKTRAFILM_LICENSE.txt).
 
-Under Settings Clipboard, tick the groups to transfer and choose **Sync to N**
-(or Edit → Sync Settings). This reads the current photo's latest edits, preserves
-the clipboard and source photo, and saves the other selected photos immediately.
-They develop with those settings when opened. Crop, Post-Dev adjustments, lens
-correction, Film Edge and Date Back stay with each photo, following the existing
-clipboard rules. As Shot white balance and fitted Scene Placement are resolved
-for each target. Sync has no batch undo; the status reports writes and failures.
-Selection and sync are disabled during batch export.
-
-## Film Edge, Date Back and half-frame pairs
-
-**Film Edge** (left rail) turns the canvas into the film: pick a format and the
-frame is cut to its gate and shown on the strip, with the stock's own edge
-print and a frame number you can set; a strip scan ends at the film's edges.
-The crop becomes the framing in the gate, so it is part of the
-negative. **Date Back** exposes the shooting date (or a date you type) into the
-frame; it needs no film edge. With one, it can print the shooting data beside
-the frame at the same time, and on 120 (645 to 6×9) the date and the data go
-in the film margin, where a medium-format back printed them.
-
-**A half-frame pair** is two frames on one frame's worth of 135. With Film Edge
-on *Half*, **Enter Half-Frame Pair** appears under the format (or pick two
-photos and press ⌘J). The canvas shows two holes; an empty one has a **+**.
-Click a hole to pick its frame: Input / Camera, Scene Placement, the Enlarger
-and Post-Dev then act on that frame alone, and *+ Film* moves the film around
-it too. Right-click a hole to replace, turn or crop its frame. In the crop
-mode, drag moves the picture under its hole and scroll or pinch scales it about
-the pointer. A pair is one item in the filmstrip and exports as one picture.
-
-Drag a thumbnail along the filmstrip to reorder a folder; the order is kept for
-that folder. A file dropped from Finder still opens and edits.
-
-## Build
-
-Xcode 26.6.
-
-```bash
-engine/build.sh bundle                 # engine, kernels, baked resources
-cd modern_UI/Spektrafilm
-xcodebuild -project Spektrafilm.xcodeproj -scheme Spektrafilm \
-           -derivedDataPath build/DerivedData build
-```
-
-Re-run `engine/build.sh bundle` whenever `engine/resources/` changes. If Xcode
-suddenly cannot find `metal`, clean the build folder (⇧⌘K): the Metal
-toolchain's mount path changed under a cached build.
-
-## Test
-
-```bash
-xcodebuild -project Spektrafilm.xcodeproj -scheme SpektrafilmTests \
-           -derivedDataPath build/DerivedData test       # ~550 tests, ~6 min
-```
-
-Camera fixtures come from the upstream `spektrafilm` repository through a
-`tests` symlink (`ln -s ../spektrafilm/tests tests`). Without it 25 cases skip
-and the run still reports 0 failures in ~20 s — trust the duration.
-
-## Layout
-
-| | |
-|---|---|
-| `modern_UI/Spektrafilm/` | the app: SwiftUI, AppKit, Metal |
-| `engine/` | the C++20 render engine, its MSL kernels and C ABI |
-| `engine/resources/` | baked constants, 28 film and paper profiles, print LUTs |
-| `ARCHITECTURE.md` | how it fits together — start here |
-| `AGENTS.md` | conventions and the traps that cost real time |
-
-## Windows development
-
-This branch also contains a Windows port: the same C++ engine on a Vulkan
-backend, native LibRaw 0.22.2 decoding, and a Qt Quick editor laid out as the
-macOS app, built with Visual Studio 2022 (MSVC) and Qt 6.11.3. Every engine
-feature is ported, Film Edge, Date Back, the contrast mask, the Cineon DI and
-Scene Placement included. The editor has the Pre-Dev and Post-Dev rails,
-half-frame pairs, the library and Settings Clipboard, the export page with
-its colour spaces, a ProPhoto RGB working space and display colour management
-per monitor with a soft proof. It is a development build: no installer or
-signed release, no CLI or MCP server, no EDR, and no whole-image comparison
-with the Mac yet.
-
-```powershell
-& .\windows_UI\build-msvc.ps1 -DependencyDirectory ..\deps -RunTests -Package
-```
-
-See the [Qt editor and its build guide](windows_UI/README.md) (prerequisites,
-the dependency folder, tests and the zip package), what the port
-[added since it started](windows_UI/CHANGES-WINDOWS.md), the
-[engine on Windows](engine/WINDOWS.md) and its
-[feature coverage](engine/WINDOWS_FEATURE_COVERAGE.md) for the tested scope.
-The [minimal Win32 viewer](engine/WINDOWS_DESKTOP.md) is also retained.
-
-## Credits and licence
-
-The film process model, its 28 measured color profiles and the print LUTs are
-[spektrafilm](https://github.com/andreavolpato/spektrafilm) by Andrea Volpato;
-4 new measured B&W profiles are by Hanze Qiu;
-SpektraLab is a native C++/Metal port of that engine and the application built
-around it.
-
-| | |
-|---|---|
-| app and engine | GPL-3.0-or-later |
-| film and paper profiles, print LUTs | CC BY-SA 4.0 |
-| metal-cpp | Apache-2.0 |
-
-All texts ship inside the app, under **SpektraLab → About SpektraLab**.
+Hanze Qiu’s four black-and-white film profiles and Multigrade IV RC paper are documented in the [profile notice](engine/resources_product/NOTICE.md). Notices for Qt, LibRaw, fonts and other bundled components are available in the app’s About window and in the [Windows third-party notices](windows_UI/THIRD_PARTY.md).

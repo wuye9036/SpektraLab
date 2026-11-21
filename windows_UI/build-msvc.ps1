@@ -25,9 +25,9 @@ param(
 # The Visual Studio environment is imported into this process only; PATH and
 # the rest of the environment are restored on exit.
 # -Package (Release, deployed) zips the app folder, after the tests when
-# -RunTests is given, into <build>/package/SpektraLab-Windows-<version>-x64.zip.
-# -Installer does the same and then compiles installer/SpektraLab.iss from that
-# staged folder into SpektraLab-Windows-<version>-x64-Setup.exe beside it, with
+# -RunTests is given, into <build>/package/SpektrafilmWinApp-v<version>-x64.zip.
+# -Installer does the same and then compiles installer/SpektrafilmWinApp.iss from that
+# staged folder into SpektrafilmWinApp-v<version>-x64-Setup.exe beside it, with
 # Inno Setup 6 (-InnoSetupCompiler, default <deps>/InnoSetup6/ISCC.exe).
 $ErrorActionPreference = 'Stop'
 if ($Installer) { $Package = $true }
@@ -107,14 +107,14 @@ try {
     $buildArguments = @('--build', $BuildDirectory)
     # 0 lets Ninja use every core; parallel worktree builds pass a share.
     if ($Jobs -gt 0) { $buildArguments += @('--parallel', $Jobs) }
-    if (-not $RunTests) { $buildArguments += @('--target', 'SpektraLabQt') }
+    if (-not $RunTests) { $buildArguments += @('--target', 'SpektrafilmWinApp') }
     if ($KeepGoing) { $buildArguments += @('--', '-k', '0') }
     Invoke-Tool $cmake $buildArguments 'Build'
 
     $app = Join-Path $BuildDirectory 'app'
     if (-not $NoDeploy) {
         $mode = if ($Configuration -eq 'Debug') { '--debug' } else { '--release' }
-        Invoke-Tool "$QtDirectory/bin/windeployqt.exe" @($mode, '--no-translations', '--qmldir', "$PSScriptRoot/qml", "$app/SpektraLabQt.exe") 'Deployment'
+        Invoke-Tool "$QtDirectory/bin/windeployqt.exe" @($mode, '--no-translations', '--qmldir', "$PSScriptRoot/qml", "$app/SpektrafilmWinApp.exe") 'Deployment'
         # windeployqt deploys only qwindows; the offscreen plugin serves the
         # --self-test and --snapshot modes.
         Copy-Item -LiteralPath "$QtDirectory/plugins/platforms/qoffscreen.dll" -Destination "$app/platforms/qoffscreen.dll" -Force
@@ -151,14 +151,14 @@ try {
         $env:TEMP = $scratch; $env:TMP = $scratch
         Invoke-Tool $ctest @('--test-dir', $BuildDirectory, '--output-on-failure') 'CTest'
     }
-    Write-Output "Ready: $app\SpektraLabQt.exe"
+    Write-Output "Ready: $app\SpektrafilmWinApp.exe"
     if ($Package) {
         # The version is the one the About window shows (CMakeLists.txt's
-        # SPEKTRALAB_VERSION, the macOS app's MARKETING_VERSION).
+        # SPEKTRALAB_VERSION).
         $cmakeLists = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'CMakeLists.txt') -Raw
         if ($cmakeLists -notmatch 'set\(SPEKTRALAB_VERSION "([^"]+)"\)') { throw 'SPEKTRALAB_VERSION not found in windows_UI/CMakeLists.txt.' }
         $version = $Matches[1]
-        $name = "SpektraLab-Windows-$version-x64"
+        $name = "SpektrafilmWinApp-v$version-x64"
         $packageDirectory = Join-Path $BuildDirectory 'package'
         $stage = Join-Path $packageDirectory $name
         $zip = Join-Path $packageDirectory "$name.zip"
@@ -172,7 +172,7 @@ try {
         # AppData. The filters below keep it that way if that ever changes.
         # vc_redist.x64.exe is left out: the runtime DLLs are already beside
         # the executable.
-        $excludedFiles = @('vc_redist.x64.exe', '*.pdb', '*.ilk', '*.exp', '*.lib', 'spk_*.exe', '*_test.exe',
+        $excludedFiles = @('SpektraLabQt.exe', 'vc_redist.x64.exe', '*.pdb', '*.ilk', '*.exp', '*.lib', 'spk_*.exe', '*_test.exe',
                            '*.spektra.json', '*.order.json', 'settings*.json', '*.ini', '*.log')
         $excludedDirectories = @('Edits', 'Order', 'Recipes', 'tmp')
         Get-ChildItem -LiteralPath $app -Recurse -File | ForEach-Object {
@@ -190,7 +190,7 @@ try {
             }
         }
         # What the folder cannot run or be distributed without.
-        foreach ($required in @('SpektraLabQt.exe', 'Qt6Core.dll', 'Qt6Quick.dll', 'platforms/qwindows.dll',
+        foreach ($required in @('SpektrafilmWinApp.exe', 'Qt6Core.dll', 'Qt6Quick.dll', 'platforms/qwindows.dll',
                                 'qml/QtQuick/Controls', 'vcruntime140.dll', 'msvcp140.dll', 'vcomp140.dll',
                                 'resources/vulkan/spk_affine3.spv', 'resources/spektrafilm_constants.bin',
                                 'resources/profiles/kodak_portra_400.json',
@@ -221,7 +221,7 @@ try {
             $setup = Join-Path $packageDirectory "$name-Setup.exe"
             if (Test-Path -LiteralPath $setup) { Remove-Item -LiteralPath $setup -Force }
             Invoke-Tool $InnoSetupCompiler @('/Q', "/DAppVersion=$version", "/DSourceDir=$stage", "/DOutputDir=$packageDirectory",
-                                             (Join-Path $PSScriptRoot 'installer/SpektraLab.iss')) 'Inno Setup'
+                                             (Join-Path $PSScriptRoot 'installer/SpektrafilmWinApp.iss')) 'Inno Setup'
             if (-not (Test-Path -LiteralPath $setup)) { throw "Inno Setup did not write $setup" }
             Write-Output ("Installer: {0} ({1:N1} MB)" -f $setup, ((Get-Item -LiteralPath $setup).Length / 1MB))
         }

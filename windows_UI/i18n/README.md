@@ -19,7 +19,7 @@ Simplified Chinese (`zh-Hans.json`), Japanese (`ja.json`) and Spanish (`es.json`
   directly from a binding would not update on a switch.
 - Tables are loaded from the compiled-in resources (`:/i18n`, listed in
   `windows_UI/CMakeLists.txt`) and then from an `i18n` folder beside
-  `SpektraLabQt.exe`, if there is one. A later table for the same language
+  `SpektrafilmWinApp.exe`, if there is one. A later table for the same language
   overrides it key by key, so a translator can fix or add text without a
   rebuild.
 - The language is English unless Settings ▸ General ▸ Language (or
@@ -77,7 +77,7 @@ translation; numbers arrive already formatted (`"2.31"`, not `2.3071`).
 1. Copy `en.json` to `<code>.json`, set the header, translate the values.
    A key you leave out, or leave empty, shows the English.
 2. To try it without rebuilding, put the file in `i18n\` beside
-   `SpektraLabQt.exe` and choose it in Settings ▸ General. To ship
+   `SpektrafilmWinApp.exe` and choose it in Settings ▸ General. To ship
    it, add it to the `spektralab_languages` list in
    `windows_UI/CMakeLists.txt`.
 3. Run CTest: `spk_qt_localizer` checks the bundled Chinese, Japanese and

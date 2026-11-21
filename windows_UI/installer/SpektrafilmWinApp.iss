@@ -1,7 +1,7 @@
-; SpektraLab's Windows installer (Inno Setup 6). build-msvc.ps1 -Installer
+; SpektrafilmWinApp's Windows installer (Inno Setup 6). build-msvc.ps1 -Installer
 ; compiles it from the same staged folder the -Package zip is made of:
 ;
-;   ISCC.exe /DAppVersion=1.3.3 /DSourceDir=<stage> /DOutputDir=<dir> SpektraLab.iss
+;   ISCC.exe /DAppVersion=1.0 /DSourceDir=<stage> /DOutputDir=<dir> SpektrafilmWinApp.iss
 ;
 ; Per user without administrator rights by default (%LOCALAPPDATA%\Programs),
 ; or for all users (Program Files) when chosen in the first page. The MSVC
@@ -22,12 +22,12 @@
 [Setup]
 ; Never change AppId: it is how an upgrade finds the installed copy.
 AppId={{A1C3249B-36BE-4BC8-A969-856FB1ABFE26}
-AppName=SpektraLab
+AppName=SpektrafilmWinApp
 AppVersion={#AppVersion}
-AppVerName=SpektraLab {#AppVersion}
-AppPublisher=SpektraLab contributors
+AppVerName=SpektrafilmWinApp v{#AppVersion}
+AppPublisher=SpektrafilmWinApp contributors
 VersionInfoVersion={#AppVersion}
-DefaultDirName={autopf}\SpektraLab
+DefaultDirName={autopf}\SpektrafilmWinApp
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
@@ -35,14 +35,14 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 SetupIconFile=..\resources\SpektraLab.ico
-UninstallDisplayIcon={app}\SpektraLabQt.exe
-UninstallDisplayName=SpektraLab {#AppVersion}
+UninstallDisplayIcon={app}\SpektrafilmWinApp.exe
+UninstallDisplayName=SpektrafilmWinApp v{#AppVersion}
 OutputDir={#OutputDir}
-OutputBaseFilename=SpektraLab-Windows-{#AppVersion}-x64-Setup
+OutputBaseFilename=SpektrafilmWinApp-v{#AppVersion}-x64-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-; A running SpektraLab is asked to close (Restart Manager) before files change.
+; A running SpektrafilmWinApp is asked to close (Restart Manager) before files change.
 CloseApplications=yes
 RestartApplications=no
 
@@ -53,6 +53,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [InstallDelete]
+; Remove the former executable and shortcuts when upgrading in place.
+Type: files; Name: "{autoprograms}\SpektraLab.lnk"; Check: FileExists(ExpandConstant('{app}\SpektraLabQt.exe'))
+Type: files; Name: "{autodesktop}\SpektraLab.lnk"; Check: FileExists(ExpandConstant('{app}\SpektraLabQt.exe'))
+Type: files; Name: "{app}\SpektraLabQt.exe"
 ; An upgrade replaces these whole, so no QML or engine data of an older
 ; version is left beside the new.
 Type: filesandordirs; Name: "{app}\qml"
@@ -63,8 +67,8 @@ Type: filesandordirs; Name: "{app}\licenses"
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\SpektraLab"; Filename: "{app}\SpektraLabQt.exe"
-Name: "{autodesktop}\SpektraLab"; Filename: "{app}\SpektraLabQt.exe"; Tasks: desktopicon
+Name: "{autoprograms}\SpektrafilmWinApp"; Filename: "{app}\SpektrafilmWinApp.exe"
+Name: "{autodesktop}\SpektrafilmWinApp"; Filename: "{app}\SpektrafilmWinApp.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\SpektraLabQt.exe"; Description: "{cm:LaunchProgram,SpektraLab}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\SpektrafilmWinApp.exe"; Description: "{cm:LaunchProgram,SpektrafilmWinApp}"; Flags: nowait postinstall skipifsilent

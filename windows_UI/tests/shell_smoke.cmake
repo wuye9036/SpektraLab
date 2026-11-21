@@ -3,7 +3,7 @@
 # --self-test) with its edits and preferences inside it, then show the report.
 # ShellCapture.hpp says what passes; the exit code is the app's.
 if(NOT APP OR NOT OUTPUT)
-    message(FATAL_ERROR "usage: cmake -DAPP=<SpektraLabQt.exe> -DOUTPUT=<directory> -P shell_smoke.cmake")
+    message(FATAL_ERROR "usage: cmake -DAPP=<SpektrafilmWinApp.exe> -DOUTPUT=<directory> -P shell_smoke.cmake")
 endif()
 file(REMOVE_RECURSE "${OUTPUT}")
 file(MAKE_DIRECTORY "${OUTPUT}")
@@ -19,5 +19,5 @@ endif()
 if(NOT result EQUAL 0)
     message("${out}")
     message("${err}")
-    message(FATAL_ERROR "SpektraLabQt --capture-shell exited with ${result}")
+    message(FATAL_ERROR "SpektrafilmWinApp --capture-shell exited with ${result}")
 endif()
