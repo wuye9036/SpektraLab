@@ -122,7 +122,7 @@ if(NOT APPLE)
             spk_lincomb3 spk_log10_guarded spk_curves
             spk_couplers_correction spk_spectral_epilogue
             spk_print_exposure spk_cam16ucs_compress
-            spk_cctf_encode_matrix spk_to_rgba16 spk_display_texture
+            spk_cctf_encode_matrix spk_to_rgba16 spk_display_texture spk_display_geometry
             spk_grain_layers spk_grain_layer_one spk_grain_simple
             spk_lognormal_field spk_rng_probe spk_mul spk_glare_add
             spk_reduce_max spk_boost spk_bw_correct spk_edr spk_cctf_decode
@@ -187,7 +187,7 @@ if(NOT APPLE)
 
         if(SPEKTRALAB_BUILD_NATIVE_RAW)
             include(cmake/LibRaw.cmake)
-            add_library(spk_image_io STATIC src/io/raw_decoder.cpp src/io/raw_headroom.cpp src/io/image_writer.cpp)
+            add_library(spk_image_io STATIC src/io/raw_decoder.cpp src/io/embedded_lens.cpp src/io/raw_headroom.cpp src/io/image_writer.cpp)
             target_compile_features(spk_image_io PUBLIC cxx_std_20)
             target_include_directories(spk_image_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
             target_link_libraries(spk_image_io PRIVATE spk_libraw)

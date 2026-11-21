@@ -1769,7 +1769,7 @@ bool Pipeline::node_cctf(const Image& in, Image& out, std::string& error) {
 // (AGENTS.md trap 5, `mx.eval` at node boundaries).
 #define SPK_NODE(call)                                                     \
     do {                                                                   \
-        if (progress_ && progress_->cancelled) {                           \
+        if (progress_ && progress_->stop_requested()) {                    \
             error = "render cancelled";                                    \
             return false;                                                  \
         }                                                                  \
@@ -1791,7 +1791,7 @@ bool Pipeline::node_cctf(const Image& in, Image& out, std::string& error) {
 // where a band first reaches a node, and where a pitch taken from one would
 // first bend every grain size and blur radius in the picture.
 bool Pipeline::film_prefix(const Image& in, const FrameShape& frame, Image& cur,
-                           std::string& error) {
+                           std::string& error, std::optional<uint32_t> replay_seed) {
     Image next;
     SPK_NODE(node_input_cast(in, cur, error));
     SPK_NODE(node_decode_input(cur, next, error)); cur = next;
@@ -1828,8 +1828,8 @@ bool Pipeline::film_prefix(const Image& in, const FrameShape& frame, Image& cur,
     // assumed: the hash of every un-striped render is byte-identical across
     // this change.
     const GrainParams& film_grain = params_.film_render.grain;
-    film_seed_ = (film_grain.active && params_.settings.grain_sampler != "exact")
-               ? fresh_seed() : 0x5EEDu;
+    if (replay_seed) film_seed_ = *replay_seed;
+    else film_seed_ = (film_grain.active && params_.settings.grain_sampler != "exact") ? fresh_seed() : 0x5EEDu;
     return true;
 }
 
@@ -1927,7 +1927,8 @@ bool Pipeline::film_log_and_curves(Chain& in, Chain& out, std::string& error) {
 bool Pipeline::film_couplers(Chain& in, Chain& out, std::string& error) {
     Image next;
     SPK_NODE(node_dir_couplers(in.cur, in.log_e_film, next, error));
-    out = in;
+    // The couplers are the last reader of log exposure. Leave that plane
+    // available for the grain pass and its blurs.
     out.cur = next;
     return true;
 }
@@ -2085,14 +2086,15 @@ std::vector<StripSpan> Pipeline::strip_plan(uint32_t plane_h) const {
     return plan;
 }
 
-bool Pipeline::run_film(const Image& in, Image& out, Progress* progress, std::string& error) {
+bool Pipeline::run_film(const Image& in, Image& out, Progress* progress, std::string& error,
+                        std::optional<uint32_t> replay_seed) {
     if (!built_) { error = "pipeline was not built"; return false; }
     progress_ = progress;
     if (progress_) { progress_->total_nodes = node_count_; progress_->fired = 0; }
     last_ae_ev_.reset();
 
     Chain chain;
-    if (!film_prefix(in, FrameShape{in.h, in.w}, chain.cur, error)) return false;
+    if (!film_prefix(in, FrameShape{in.h, in.w}, chain.cur, error, replay_seed)) return false;
     if (!film_segment(chain, out, error)) return false;
     progress_ = nullptr;
     return true;
@@ -2288,14 +2290,14 @@ bool Pipeline::band_into(const Image& band, const BandRead& read, Image& plane,
 }
 
 bool Pipeline::run_film_striped(const Image& in, Image& out, Progress* progress,
-                               std::string& error) {
+                               std::string& error, std::optional<uint32_t> replay_seed) {
     if (!built_) { error = "pipeline was not built"; return false; }
     progress_ = progress;
     if (progress_) { progress_->total_nodes = node_count_; progress_->fired = 0; }
     last_ae_ev_.reset();
 
     Chain chain;
-    if (!film_prefix(in, FrameShape{in.h, in.w}, chain.cur, error)) return false;
+    if (!film_prefix(in, FrameShape{in.h, in.w}, chain.cur, error, replay_seed)) return false;
     Progress::StripRun report;
     report.stage = "film";
     report.plan = strip_plan(chain.cur.h);

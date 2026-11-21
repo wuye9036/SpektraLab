@@ -33,7 +33,7 @@ bool convert_camera_rgb_headroom(
     std::uint32_t width, std::uint32_t height, int flip,
     const std::array<float, 12>& matrix, double exposure_restore,
     std::vector<float>& rgb, std::uint32_t& output_width,
-    std::uint32_t& output_height, std::string& error) {
+    std::uint32_t& output_height, std::string& error, std::stop_token stop) {
     error.clear();
     const std::uint64_t pixels = std::uint64_t(width) * height;
     if (!camera || width == 0 || height == 0 || pixels != camera_pixels ||
@@ -63,6 +63,7 @@ bool convert_camera_rgb_headroom(
     std::vector<float> converted(static_cast<std::size_t>(pixels) * 3);
     const double output_scale = exposure_restore / 65535.0;
     for (std::uint32_t row = 0; row < out_height; ++row) {
+        if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
         for (std::uint32_t col = 0; col < out_width; ++col) {
             std::uint32_t source_row = (flip & 4) ? col : row;
             std::uint32_t source_col = (flip & 4) ? row : col;

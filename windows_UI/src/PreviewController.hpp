@@ -75,6 +75,7 @@ class PreviewController final : public QObject {
     // 33 MP. Changes whenever previewImage does.
     Q_PROPERTY(QImage navigatorImage READ navigatorImage NOTIFY frameChanged)
     Q_PROPERTY(QVariantMap metadata READ metadata NOTIFY frameChanged)
+    Q_PROPERTY(QString captureSummary READ captureSummary NOTIFY pairChanged)
     Q_PROPERTY(QVariantList films READ films NOTIFY catalogChanged)
     Q_PROPERTY(QVariantList papers READ papers NOTIFY catalogChanged)
     Q_PROPERTY(int filmIndex READ filmIndex WRITE setFilmIndex NOTIFY settingsChanged)
@@ -107,6 +108,8 @@ class PreviewController final : public QObject {
     // The print list's selected row: "__scan_film__" while the film is
     // scanned (a slide, or No Print Profile), else the paper's id.
     Q_PROPERTY(QString printSelection READ printSelection NOTIFY settingsChanged)
+    Q_PROPERTY(bool edrAvailable READ edrAvailable NOTIFY settingsChanged)
+    Q_PROPERTY(bool lensCorrectionAvailable READ lensCorrectionAvailable NOTIFY settingsChanged)
     Q_PROPERTY(bool noPrintProfile READ noPrintProfile NOTIFY settingsChanged)
     Q_PROPERTY(bool canUseFilmPaper READ canUseFilmPaper NOTIFY settingsChanged)
     // The Camera section's AE Method pill (Params.swift AEMethod): "custom" is
@@ -373,6 +376,7 @@ public:
     int previewImageEdge() const { return preview_image_edge_; }
     QImage navigatorImage() const { return navigator_; }
     QVariantMap metadata() const;
+    QString captureSummary() const;
     QVariantList films() const { return films_; }
     QVariantList papers() const { return papers_; }
     int filmIndex() const { return film_index_; }
@@ -387,6 +391,8 @@ public:
     bool filmIsMonochrome() const;
     QString printSelection() const;
     bool noPrintProfile() const;
+    bool edrAvailable() const;
+    bool lensCorrectionAvailable() const;
     bool canUseFilmPaper() const;
     QString aeMethod() const;
     QStringList aeMethodChoices() const;
@@ -571,6 +577,7 @@ public:
     // "white_balance_tint" and "white_balance"). False when refused: locked,
     // out of range (2000..50000 K, -150..150), an unknown preset, or a camera
     // with no matrix. Session.swift:2781-2814.
+    Q_INVOKABLE bool chooseLensProfile(const QUrl& file);
     Q_INVOKABLE bool setWhiteBalancePreset(const QString& id);
     Q_INVOKABLE bool setTemperature(double kelvin);
     Q_INVOKABLE bool setTint(double tint);
@@ -746,6 +753,7 @@ private:
     // Everything the canvases show of one frame, made on the worker.
     struct Publication {
         QImage full, visible, navigator, preparedGuide;
+        std::shared_ptr<const NativeCanvasFrame> nativePrint, nativeVisible;
         std::vector<float> histogram, uncropped_histogram;  // of visible, of full
         QImage source;  // a cut frame's undeveloped decode (Frame::source_preview)
         // The whole print, unturned and uncropped, at the strip's size: what
@@ -771,6 +779,7 @@ private:
         spk::desktop::output::Geometry geometry;
         spk::desktop::FramePtr frame;
         Publication publication;
+        double preceding_raw_decode_ms=0; // Exact preview refined by this full render.
         // A full render the next edit stopped (PreviewHost::RenderCancelled):
         // no failure, and the displayed frame stays.
         bool cancelled=false;
@@ -845,6 +854,7 @@ private:
     int film_index_=0, paper_index_=0, decode_mode_=0;
     double exposure_ev_=0;
     spk::desktop::FramePtr frame_;
+    std::shared_ptr<const NativeCanvasFrame> native_print_, native_visible_;
     QImage image_;
     // The picture cache: each photograph's last developed picture as the
     // canvas showed it, bounded by the preview long edge, with what it was developed
@@ -958,6 +968,7 @@ private:
     const bool live_development_;
     QTimer full_timer_;
     bool full_job_=false;
+    std::stop_source balance_stop_{std::nostopstate};
     std::mutex host_mutex_;
     spk::desktop::PreviewHost* host_=nullptr;
     void scheduleFullRender();
@@ -999,10 +1010,14 @@ private:
     // never shows a crop that is not the current geometry. Until it lands the
     // canvas keeps the last picture, as it does while a render is in flight.
     struct Visible {
+        std::shared_ptr<const NativeCanvasFrame> native;
         QImage image, navigator;
         std::vector<float> histogram;
         QString error;   // the job threw: nothing else is set
     };
+    Visible geometryPicture(const spk::desktop::FramePtr& frame, const QImage& full,
+                            const spk::desktop::output::Geometry& geometry,
+                            const std::shared_ptr<const NativeCanvasFrame>& whole);
     using VisibleJob = std::function<Visible()>;
     using VisibleTake = std::function<void(Visible)>;
     void requestVisible(VisibleJob make, VisibleTake take);

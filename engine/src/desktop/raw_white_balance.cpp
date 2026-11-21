@@ -53,7 +53,35 @@ const std::vector<WhiteBalancePreset>& white_balance_presets() {
     return presets;
 }
 
+// The imported LCP is resolved for this shot at selection time. Keep the
+// normalized radial coefficients in the edit so exports and a reopened photo
+// still use exactly that calibration if the original LCP is later moved.
+bool imported_lens_profile(const std::string& record, io::EmbeddedLens& lens) {
+    Json model;
+    std::string error;
+    if (record.size() > 4096 || !Json::parse(record, model, error) || model.at("name").as_string().empty()) return false;
+    const auto& k = model.at("radial").items();
+    const auto& centre = model.at("center").items();
+    if (k.size() != 3 || centre.size() != 2) return false;
+    for (const auto& v : k) if (!v.is_number() || !std::isfinite(v.as_double())) return false;
+    for (const auto& v : centre) if (!v.is_number() || !(v.as_double() >= 0 && v.as_double() <= 1)) return false;
+    io::EmbeddedLens parsed;
+    parsed.warp_center = {centre[0].as_double(), centre[1].as_double()};
+    auto& curve = parsed.scales[0];
+    curve.resize(1025);
+    for (size_t i = 0; i < curve.size(); ++i) {
+        const double r = double(i) / (curve.size()-1), q = r*r;
+        const double scale = 1 + q * (k[0].as_double() + q * (k[1].as_double() + q * k[2].as_double()));
+        if (!(scale > 0 && scale <= 32)) return false;
+        curve[i] = float(scale);
+    }
+    lens = std::move(parsed);
+    return true;
+}
+
 bool same_decode(const RenderSettings& a, const RenderSettings& b) {
+    if (a.get("lens_correction") != b.get("lens_correction")) return false;
+    if (std::get<bool>(a.get("lens_correction")) && a.get("lens_profile") != b.get("lens_profile")) return false;
     const WhiteBalance x = white_balance(a), y = white_balance(b);
     if (x.as_shot() || y.as_shot()) return x.as_shot() == y.as_shot();
     return x.temperature == y.temperature && x.tint == y.tint;
@@ -94,6 +122,8 @@ bool decode_flat(const std::filesystem::path& source, io::DecodedRaw& out, std::
     const auto& meta = probe.metadata;
     decoded.metadata.make = meta.make;
     decoded.metadata.model = meta.model;
+    decoded.metadata.lens_model = meta.lens;
+    decoded.metadata.iso = meta.iso.value_or(0);
     std::string kind = spkhost::kind_name(probe.kind);
     for (char& c : kind) c = char(std::toupper(static_cast<unsigned char>(c)));
     decoded.metadata.decoder_name = kind + ", " + space;
@@ -117,7 +147,7 @@ bool decode_flat(const std::filesystem::path& source, io::DecodedRaw& out, std::
 }  // namespace
 
 bool decode_raw(const std::filesystem::path& source, DecodeMode mode, const RenderSettings& settings,
-                io::DecodedRaw& out, std::string& error) {
+                io::DecodedRaw& out, std::string& error, std::stop_token stop) {
     // A flat file has no camera to balance and one decode (header above).
     if (flat_file(source)) return decode_flat(source, out, error);
     const WhiteBalance wb = white_balance(settings);
@@ -141,10 +171,24 @@ bool decode_raw(const std::filesystem::path& source, DecodeMode mode, const Rend
         user = &mul;
         header_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     }
-    const bool ok = mode == DecodeMode::headroom ? io::decode_raw_headroom(source, user, out, error)
-                                                 : io::decode_raw_compatible(source, user, out, error);
+    const bool ok = mode == DecodeMode::headroom ? io::decode_raw_headroom(source, user, out, error, stop)
+                                                 : io::decode_raw_compatible(source, user, out, error, stop);
     // The header read is part of opening the file, and is reported as such.
     if (ok) {
+        if (std::get<bool>(settings.get("lens_correction"))) {
+            const auto start = std::chrono::steady_clock::now();
+            const auto record = std::get<std::string>(settings.get("lens_profile"));
+            io::EmbeddedLens imported;
+            if (!record.empty() && !imported_lens_profile(record, imported)) {
+                error = "Invalid saved lens profile";
+                return false;
+            }
+            io::apply_lens_profile(out, record.empty() ? out.metadata.lens_profile : imported, stop);
+            if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
+            const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            out.timings.convert_ms += ms;
+            out.timings.total_ms += ms;
+        }
         out.timings.open_ms += header_ms;
         out.timings.total_ms += header_ms;
     }
@@ -165,6 +209,41 @@ std::array<double, 9> camera_to_output(const io::RawMetadata& metadata) {
             }
         }
     return m;
+}
+
+bool preview_white_balance(io::DecodedRaw& image, const WhiteBalance& target) {
+    const auto& meta = image.metadata;
+    if (!meta.camera_raw || meta.colors != 3) return false;
+    auto wanted = meta.camera_whitebalance;
+    std::string error;
+    if (!target.as_shot() && !spkhost::multipliers_for(meta.xyz_to_camera, target.temperature, target.tint, wanted, error))
+        return false;
+    // Both decode policies ultimately restore min-normalised WB. LibRaw can
+    // report a zero as-shot G2 on a three-colour camera; it then uses green.
+    if (wanted[3] == 0) wanted[3] = wanted[1];
+    const auto& applied = meta.post_scale_pre_mul;
+    const double oldMin = *std::min_element(applied.begin(), applied.end());
+    const double newMin = *std::min_element(wanted.begin(), wanted.end());
+    if (!(newMin > 0 && oldMin > 0)) return false;
+    const auto output = camera_to_output(meta);
+    std::array<double, 9> inverse;
+    if (!invert(output, inverse)) return false;
+    // Undo the old camera gains and apply the new ones before film exposure.
+    // A clipped or interpolated camera sample can only be recovered by the
+    // exact RAW decode when the control is released.
+    float matrix[9]{};
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            for (int k = 0; k < 3; ++k)
+                matrix[r*3+c] += float(output[r*3+k] * (wanted[k]*oldMin / (applied[k]*newMin)) * inverse[k*3+c]);
+    for (size_t i = 0; i < image.rgb.size(); i += 3) {
+        const float r = image.rgb[i], g = image.rgb[i+1], b = image.rgb[i+2];
+        for (int k = 0; k < 3; ++k) {
+            const float v = matrix[k*3]*r + matrix[k*3+1]*g + matrix[k*3+2]*b;
+            image.rgb[i+k] = meta.headroom_enabled ? v : std::clamp(v, 0.0f, 1.0f);
+        }
+    }
+    return true;
 }
 
 bool neutral_white_balance(const std::array<double, 9>& xyz_to_camera, const std::array<double, 9>& to_output,

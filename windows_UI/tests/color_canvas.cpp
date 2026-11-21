@@ -17,9 +17,12 @@
 #include "gpu/d3d11_target.hpp"
 #include "PostDevGpu.hpp"
 #include "FrameImage.hpp"
+#include "FrameOutput.hpp"
 #include <d3d11.h>
 #include <dxgi1_4.h>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QThread>
 #include <cstring>
 #include <wrl/client.h>
@@ -46,6 +49,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <future>
 #include <memory>
 #include <set>
 #include <stdexcept>
@@ -973,6 +977,73 @@ void benchmark(const QString& resources) {
 }
 
 #ifdef Q_OS_WIN
+static void checkGeometry(Harness& scene,const spk::gpu::D3D11Publication& publication,const QImage& codes,
+                          const std::vector<spk::desktop::output::Geometry>& cases) {
+    using namespace spk;
+    check(bool(publication.project),"native geometry publication unavailable");
+    for (const auto& geometry : cases) {
+        const int turns=geometry.quarterTurns;
+        const double angle=geometry.straightenDegrees;
+        const auto rect=desktop::output::cropPixels(codes.size(),geometry.crop);
+        gpu::DisplayGeometry g{uint32_t(codes.width()),uint32_t(rect.x()),uint32_t(rect.y()),uint32_t(rect.width()),
+            uint32_t(rect.height()),uint32_t(turns),uint32_t(geometry.flipHorizontal)|(uint32_t(geometry.flipVertical)<<1),angle};
+        const auto reference=desktop::output::displayImage(codes,geometry);
+        gpu::D3D11Publication target;
+        target.producer=publication.producer;
+        target.producerMutex=publication.producerMutex;
+        QImage actual,unused;
+        std::vector<float> bins;
+        target.analyze=[&](ID3D11Texture2D* tex) {
+            if (geometry==desktop::output::Geometry{}) {
+                auto competing=std::async(std::launch::async,[] {
+                    return std::unique_lock(desktop::postdev::analysisMutex(),std::try_to_lock).owns_lock();
+                });
+                check(!competing.get(),"analysis context was available during shared-texture ownership");
+            }
+            desktop::postdev::analyzeDisplay(tex,QColorSpace::SRgb,reference.size(),
+                desktop::display::kHistogramSamples,actual,unused,bins,false);
+        };
+        std::string why;
+        auto projected=publication.project(g,target,why);
+        check(projected && actual.size()==reference.size(),"wrong projected surface size: "+why);
+        check(unused.isNull() && bins==desktop::display::histogram(actual),"projected analysis mismatch");
+        // Bilinear arithmetic may round an exact code by one at a midpoint.
+        // Compare before half conversion; a half ULP spans many source codes.
+        const int tolerance=angle==0 ? 0 : 1;
+        for (int y=0;y<actual.height();++y) {
+            const auto* wanted=reinterpret_cast<const quint16*>(reference.constScanLine(y));
+            const auto* got=reinterpret_cast<const qfloat16*>(actual.constScanLine(y));
+            for (int i=0;i<actual.width()*4;++i) {
+                const auto low=qfloat16(float(std::max(0,int(wanted[i])-tolerance))/65535.f);
+                const auto high=qfloat16(float(std::min(65535,int(wanted[i])+tolerance))/65535.f);
+                if (got[i]<low || got[i]>high) {
+                    std::fprintf(stderr,"geometry %.2f turns %d at %d,%d channel %d expected %u got %g\n",
+                        angle,turns,i/4,y,i%4,unsigned(wanted[i]),float(got[i]));
+                    check(false,"geometry display pixels differ");
+                }
+            }
+        }
+        // Also exercise the actual material, including Fit filtering and a
+        // crop-mode restoration that outlives the first scene-graph draw.
+        if (angle==.2 && turns==1) {
+            scene.canvas().setNativeDisplay({}, {});
+            scene.canvas().setImage(actual);
+            const auto expected=scene.render();
+            QImage black(actual.size(),actual.format());
+            black.fill(Qt::black);black.setColorSpace(actual.colorSpace());
+            scene.canvas().setImage(black);
+            auto descriptor=std::make_shared<NativeCanvasFrame>();
+            descriptor->size=descriptor->logicalSize=actual.size();
+            int restores=0;
+            descriptor->restoreTexture=[&]{++restores;return projected;};
+            scene.canvas().setNativeFrame(QVariant::fromValue(NativeCanvasFrameRef(descriptor)));
+            check(scene.render()==expected && scene.render()==expected && restores==1,"lazy projected canvas mismatch");
+            scene.canvas().setNativeDisplay({}, {});
+            scene.render();
+        }
+    }
+}
+
 // Compare the two publications at the actual scene-graph render target. A
 // black CPU image on the native pass makes an accidental upload fail loudly.
 static void interop(const QString& resources) {
@@ -1001,17 +1072,23 @@ static void interop(const QString& resources) {
     scene.canvas().setImage(black);
     check(scene.render()!=expected,"reference draw unexpectedly black");
     gpu::D3D11Publication publication;
+    publication.allowGeometry=true;
     auto& display=publication.texture;
     spk_result meta{};
     QImage navigator,guide;
     std::vector<float> histogram;
     publication.producer=desktop::postdev::analysisDevice();
+    publication.producerMutex=&desktop::postdev::analysisMutex();
     publication.analyze=[&](ID3D11Texture2D* tex) {
         desktop::postdev::analyzeDisplay(tex,QColorSpace::SRgb,{111,111},desktop::display::kHistogramSamples,navigator,guide,histogram);
     };
     const auto status=gpu::render_d3d11(session.get(),"full",true,publication,meta,true);
     check(status==SPK_OK,spk_last_error(engine.get()));
     check(display && !meta.rgba16 && !meta.texture && meta.width==w && meta.height==h,"unexpected host output");
+    const auto memory = QJsonDocument::fromJson(spk_memory_report(engine.get())).object();
+    const auto idleBytes = memory.value("pool").toObject().value("free_bytes").toInteger(-1);
+    check(idleBytes >= 0 && idleBytes < qint64(w) * h * 12,
+          "full display publication retained a reusable full-size RGB plane");
     check(navigator==desktop::display::downscaled(ref,{111,111}),"shared navigator pixels differ");
     check(histogram==desktop::display::histogram(ref),"shared histogram differs");
     check(guide==desktop::postdev::gpuToneGuide(ref,desktop::postdev::ToneSpace::SRgb),"shared tone guide differs");
@@ -1019,6 +1096,17 @@ static void interop(const QString& resources) {
     check(publication.readPixels && publication.readPixels(meta,why),why);
     check(meta.row_stride_px==cpu.row_stride_px &&
           std::memcmp(meta.rgba16,cpu.rgba16,size_t(h)*cpu.row_stride_px*8)==0,"exact export codes differ");
+    std::vector<desktop::output::Geometry> cases;
+    for (double angle : {0.,0.2,-0.2,45.,-45.})
+        for (int turns=0;turns<4;++turns)
+            cases.push_back({{.07,.03,.84,.89},turns,bool(turns&1),bool(turns&2),angle});
+    cases.push_back({});
+    cases.push_back({{.23,.12,1./w,.76},3,true,true,45.});
+    cases.push_back({{.03,.92,.96,1./h},0,true,false,-.2});
+    checkGeometry(scene,publication,QImage(reinterpret_cast<const uchar*>(cpu.rgba16),w,h,cpu.row_stride_px*8,
+                                          QImage::Format_RGBA64),cases);
+    scene.canvas().setImage(black);
+    publication.project={};
     publication.readPixels={};
     spk_result_free(&cpu);spk_result_free(&meta);
     session.reset();engine.reset();
@@ -1036,7 +1124,12 @@ static void interop(const QString& resources) {
     }
     if(unequal) std::printf("unequal=%zu max=%g\n",unequal,maxError);
     check(!unequal,"shared image differs from the host path in the FP32 canvas target");
+    // A QML binding can keep its previous QVariant until the next collection.
+    const auto previousBinding = scene.canvas().nativeDisplay();
+    std::weak_ptr<gpu::SharedDisplay> previousTexture = display;
     scene.canvas().setNativeDisplay({},{});display.reset();
+    check(previousTexture.expired(), "a retired QML value still owns the display texture");
+    scene.canvas().setNativeFrame(previousBinding);
     check(scene.render()!=expected,"retired native frame still visible");
     std::printf("PASS native Vulkan reprint -> D3D11 FrameCanvas, %dx%d FP32 target bit identical\n",w,h);
 }
@@ -1063,7 +1156,9 @@ static void interopPhotos(const QString& resources,const QStringList& files) {
     QImage nav,guide;std::vector<float> histogram;
     options.beginDisplay=[&](const desktop::OutputEncoding& encoding) {
         auto publication=std::make_shared<gpu::D3D11Publication>();
+        publication->allowGeometry=true;
         publication->producer=desktop::postdev::analysisDevice();
+        publication->producerMutex=&desktop::postdev::analysisMutex();
         publication->analyze=[&,space=desktop::display::colorSpace(encoding)](ID3D11Texture2D* texture) {
             desktop::postdev::analyzeDisplay(texture,space,{1024,1024},desktop::display::kHistogramSamples,nav,guide,histogram);
         };
@@ -1097,6 +1192,11 @@ static void interopPhotos(const QString& resources,const QStringList& files) {
                 scene.canvas().setNativeDisplay({},{});
                 scene.canvas().setImage(ref);
                 check(scene.render()==draw,"photo scene-graph pixels differ");
+                const auto& exact=frame->pixels();
+                QImage codes(reinterpret_cast<const uchar*>(exact.rgba16),size.width(),size.height(),
+                             exact.row_stride_px*8,QImage::Format_RGBA64);
+                checkGeometry(scene,*frame->display,codes,{{{.07,.03,.84,.89},1,true,false,.2}});
+
             }
         }
         scene.canvas().setNativeDisplay({},{});

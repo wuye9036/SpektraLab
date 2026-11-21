@@ -1,10 +1,13 @@
 #pragma once
 
+#include "embedded_lens.hpp"
+
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <stop_token>
 
 namespace spk::io {
 
@@ -77,6 +80,10 @@ struct RawMetadata {
     double white_balance_exposure_restore = 1.0;
     std::array<float, 12> camera_to_output{};
     ShootingData shooting;
+    EmbeddedLens lens_profile;
+    double focal_mm = 0;
+    double iso = 0;
+    std::string lens_model;
     // Set by the two RAW policies (capture_source_metadata): the data is
     // sensor response. False for a flat file decoded at the door, which is
     // already somebody's rendering of a scene.
@@ -112,7 +119,7 @@ bool decode_raw_compatible(const std::filesystem::path& source,
 // LibRaw's user_mul) in place of the as-shot ones. nullptr is the overload
 // above. Used by spektralab-host for Temperature/Tint at decode.
 bool decode_raw_compatible(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                           DecodedRaw& out, std::string& error);
+                           DecodedRaw& out, std::string& error, std::stop_token stop = {});
 
 // Experimental expanded-output policy for conventional three-colour Bayer
 // RAW only. As-shot WB is normalised by its largest multiplier (highlight=1)
@@ -130,6 +137,6 @@ bool decode_raw_headroom(const std::filesystem::path& source,
 // does the as-shot ones under this policy, so the exposure restore holds.
 // nullptr is the overload above. Used by the Windows desktop host.
 bool decode_raw_headroom(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                         DecodedRaw& out, std::string& error);
+                         DecodedRaw& out, std::string& error, std::stop_token stop = {});
 
 }  // namespace spk::io

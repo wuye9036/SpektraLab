@@ -50,6 +50,7 @@ namespace spk::gpu {
 // `contents()` is a pointer into the same pages the GPU reads -- no staging,
 // no copy.
 struct Buffer;
+struct DisplayGeometry;
 
 class Gpu;
 
@@ -288,6 +289,14 @@ public:
     virtual BufferRef alloc_file_backed(size_t bytes, std::string& error) = 0;
     virtual BufferRef upload_file_backed(const void* data, size_t bytes, std::string& error) = 0;
 
+    // Keep a completed, flushed negative beyond this frame. Metal backs the
+    // cache with a file; a backend with compatible storage can adopt the plane.
+    virtual BufferRef cache_negative(const BufferRef& source, size_t bytes, std::string& error) {
+        auto kept = alloc_file_backed(bytes, error);
+        if (!kept || !copy(kept.get(), 0, source.get(), 0, bytes, error)) return {};
+        return kept;
+    }
+
     // A caller's `id<MTLBuffer>`, wrapped without a copy. Retained while a
     // handle exists and released -- never pooled -- when the last one drops,
     // which is the persistent lifetime above with somebody else's memory in
@@ -395,7 +404,7 @@ public:
     // Import a fresh shared texture matching this adapter, fill it, then
     // release key 1 to its D3D11 owner. The consumer owns the NT handle.
     virtual bool write_d3d11_display(Buffer*, uint32_t, uint32_t, void*,
-                                     const void*, BufferRef*, std::string&) { return false; }
+                                     const void*, BufferRef*, const DisplayGeometry*, std::string&) { return false; }
 #endif
     // `spk_result_free` gets a result, not an engine, and a texture handed out
     // +1 must be releasable without one.

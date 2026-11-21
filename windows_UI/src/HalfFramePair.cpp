@@ -191,7 +191,7 @@ QString identity(const QString& path) {
 
 const std::vector<std::string>& cameraKeys() {
     static const std::vector<std::string> keys = [] {
-        std::vector<std::string> k{"white_balance", "white_balance_temperature", "white_balance_tint",
+        std::vector<std::string> k{"lens_profile", "lens_correction", "white_balance", "white_balance_temperature", "white_balance_tint",
                                    "auto_exposure", "auto_exposure_method", "exposure_compensation_ev"};
         for (const char* key : latitudeKeys) k.emplace_back(key);
         return k;
@@ -381,7 +381,7 @@ RenderSettings engineSettings(const RenderSettings& film, const Pair& pair) {
     // engine's own meter would read both pictures and the gap as one scene.
     s.set("auto_exposure", false);
     s.film_exposure_ev = 0;
-    for (const char* key : {"white_balance", "white_balance_temperature", "white_balance_tint"}) s.set(key, defaults.get(key));
+    for (const char* key : {"lens_profile", "lens_correction", "white_balance", "white_balance_temperature", "white_balance_tint"}) s.set(key, defaults.get(key));
     const auto* mm = find_setting("film_format_mm");
     s.film_format_mm = std::clamp(pair_piece_mm(pair.effectiveSpacing(std::get<bool>(film.get("overscan_active")))),
                                   mm->low, mm->high);
@@ -398,7 +398,7 @@ PairInput engineInput(const RenderSettings& film, const Pair& pair) {
         if (!hole) continue;
         PairHole h;
         h.source = std::filesystem::path(QDir::toNativeSeparators(hole->path).toStdWString());
-        for (const char* key : {"white_balance", "white_balance_temperature", "white_balance_tint"})
+        for (const char* key : {"lens_profile", "lens_correction", "white_balance", "white_balance_temperature", "white_balance_tint"})
             h.decode.set(key, hole->frame.get(key));
         const auto& g = hole->geometry;
         h.geometry = {g.crop.x(), g.crop.y(), g.crop.width(), g.crop.height(), g.quarterTurns, g.flipHorizontal,
@@ -438,7 +438,7 @@ Hole holeFor(const QString& path, const RenderSettings* own, const output::Geome
     // intent, with no exposure of its own; its Scene Placement starts clear --
     // the curve was fitted to the frame as a whole (resetPlacement, :4843).
     if (own) {
-        for (const char* key : {"white_balance", "white_balance_temperature", "white_balance_tint", "auto_exposure_method"})
+        for (const char* key : {"lens_profile", "lens_correction", "white_balance", "white_balance_temperature", "white_balance_tint", "auto_exposure_method"})
             h.frame.set(key, own->get(key));
     }
     return h;

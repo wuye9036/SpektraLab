@@ -25,7 +25,7 @@ canvas::View FrameCanvas::view() const {
 // pixel ratio below 1 (PreviewController publish), and is laid out -- zoom,
 // 100 %, pan -- as the full frame it stands for.
 QSize FrameCanvas::logicalSize() const {
-    if (native_.texture) return native_.logicalSize;
+    if (native_) return native_->logicalSize;
     if(image_.isNull())return {};
     const double r=image_.devicePixelRatio();
     if(r<=0||r==1)return image_.size();
@@ -81,15 +81,17 @@ void FrameCanvas::setToneSource(const QImage& image) {
     emit toneSourceChanged();
 }
 void FrameCanvas::setNativeFrame(const QVariant& value) {
-    auto next=value.value<NativeCanvasFrame>();
-    if(next.texture==native_.texture && next.logicalSize==native_.logicalSize) return;
+    auto next=value.value<NativeCanvasFrameRef>().lock();
+    if(next==native_) return;
     native_=std::move(next);
+    resolvedTexture_.reset(); recoveredImage_={};
     ++revision_;
     sync();update();emit nativeDisplayChanged();emit viewChanged();
 }
 #ifdef Q_OS_WIN
 void FrameCanvas::setNativeDisplay(std::shared_ptr<spk::gpu::SharedDisplay> frame, QSize size) {
-    setNativeFrame(QVariant::fromValue(NativeCanvasFrame{std::move(frame),size,size,{}}));
+    auto next=frame ? std::make_shared<NativeCanvasFrame>(NativeCanvasFrame{std::move(frame),size,size,{}}) : nullptr;
+    setNativeFrame(QVariant::fromValue(NativeCanvasFrameRef(next)));
 }
 #endif
 void FrameCanvas::setImage(const QImage& image) {
@@ -227,13 +229,24 @@ QSGNode* FrameCanvas::updatePaintNode(QSGNode* old,UpdatePaintNodeData*) {
     CanvasPaint paint;
     paint.image=image_;paint.revision=revision_;
 #ifdef Q_OS_WIN
-    paint.nativeFrame=native_.texture;paint.nativeSize=native_.size;paint.hostImage=native_.hostImage;
+    if (native_) {
+        if (!native_->texture && native_->restoreTexture && !resolvedTexture_ && recoveredImage_.isNull()) {
+            resolvedTexture_=native_->restoreTexture();
+            if (!resolvedTexture_ && native_->hostImage) {
+                try { recoveredImage_=native_->hostImage(); }
+                catch (const std::exception& e) { qWarning("FrameCanvas: %s", e.what()); recoveredImage_=image_; }
+            }
+        }
+        paint.nativeFrame=native_->texture ? native_->texture : resolvedTexture_;
+        paint.nativeSize=native_->size; paint.hostImage=native_->hostImage;
+        if (!recoveredImage_.isNull()) paint.image=recoveredImage_;
+    }
 #endif
     paint.lut=colour.lut;paint.proof=colour.proof;paint.warning=colour.warning;
     paint.dither=pipeline_&&pipeline_->dither();
     // Filtered when reduced, and when a live frame is drawn larger than its
     // pixels (its device pixel ratio below 1).
-    paint.rect=imageRect();paint.smooth=scale()<1.0||(native_.texture ? native_.size!=native_.logicalSize : image_.devicePixelRatio()<1.0);
+    paint.rect=imageRect();paint.smooth=scale()<1.0||(native_ ? native_->size!=native_->logicalSize : image_.devicePixelRatio()<1.0);
     paint.grade=grade_;paint.gradeRevision=grade_revision_;paint.sourceMap=sourceMap_;
     if(!node->update(window(),paint)){delete node;return nullptr;}
     return node;

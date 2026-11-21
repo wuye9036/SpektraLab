@@ -71,7 +71,7 @@ public:
     QImage toneSource() const { return toneSource_; }
     QImage preparedToneGuide() const { return preparedGuide_; }
     void setPreparedToneGuide(const QImage& guide);
-    QVariant nativeDisplay() const { return QVariant::fromValue(native_); }
+    QVariant nativeDisplay() const { return QVariant::fromValue(NativeCanvasFrameRef(native_)); }
     void setNativeFrame(const QVariant& frame);
     void setToneSource(const QImage& image);
     void setImage(const QImage& image);
@@ -161,7 +161,9 @@ private:
     QPointer<FrameCanvas> follow_;
     QMetaObject::Connection followChanged_;
     QImage image_, toneSource_, preparedGuide_;
-    NativeCanvasFrame native_;
+    std::shared_ptr<const NativeCanvasFrame> native_;
+    std::shared_ptr<spk::gpu::SharedDisplay> resolvedTexture_;
+    QImage recoveredImage_;
 
     quint64 revision_=0;
     ProofTransformPtr proof_;

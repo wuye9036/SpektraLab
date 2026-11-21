@@ -232,9 +232,7 @@ Windows carries out (Import, Export, Undo, Redo, Select All Photos, Sync
 Settings, Reset This Photo's Settings, View, Settings, About, Exit), each with
 its key.
 
-Still greyed, with the reason on hover: Lens Correction (LibRaw has no lens
-profiles), Extended Dynamic Range print profiles (no HDR output path), the
-paper list's Digital group on the canvas (no Cineon view of the canvas yet;
+Still greyed, with the reason on hover: the paper list's Digital group on the canvas (no Cineon view of the canvas yet;
 the Digital Intermediate *export* works), and in Settings every Mac setting
 without a Windows backend (below).
 
@@ -257,7 +255,7 @@ canvas or the strip do the same. A TIFF, JPEG or PNG is decoded at the door
 (`engine/src/desktop/raw_white_balance.hpp`): its ICC profile, else sRGB for an
 8-bit file and linear ProPhoto for an untagged 16-bit/float TIFF, as the Mac's
 `ImageDecoder` assumes, into the engine's scene-linear input; it has no camera
-white balance or RAW decode to choose, and Photo Info says what it was read as.
+white balance or RAW decode to choose.
 Each thumbnail is the whole photograph with everything outside its crop under
 a nearly opaque mask, turned and flipped as the canvas is
 (`CropMaskedThumbnail.swift`); until a photo has been rendered it is the file's
@@ -310,7 +308,7 @@ sent to the engine by its wire name; new photos take the macOS defaults.
   Temperature (2000-12000 K) and Tint (-150..150) with each row's As Shot box,
   greyed for a camera LibRaw has no matrix for -- the white balance presets
   and the neutral picker (one click on the picture). Vignetting is the
-  Post-Dev grade's lens fall-off, as on the Mac. Lens Correction stays greyed.
+  Post-Dev grade's lens fall-off, as on the Mac. Lens Correction uses the photograph's embedded profile or a selected LCP.
 - **Film Format**: the film's size and side, which scale grain, halation and
   coupler diffusion in micrometres, and every effect row with its switch and
   strength.
@@ -328,7 +326,8 @@ sent to the engine by its wire name; new photos take the macOS defaults.
 - **Tone Mask** (the contrast mask, RFC-024): Enable, Highlights, Shadows,
   Core and Radius with the mask's curve. The Mac hides it behind a feature
   flag; Windows shows it, folded, because the engine carries it.
-- **Photo Info**.
+
+The footer reports RAW decode or reuse, render time and display preparation time.
 
 On the left rail, **Enlarger** has the print exposure (-3..3 stops), the
 yellow and magenta filters and pre-flash, and **Print** the paper, its
@@ -580,8 +579,21 @@ its Layer 2 texture; the Original is put into the session's space; the
 Digital Intermediate carries ProPhoto primaries, which its view LUTs assume.
 The GDI viewer (`engine/tools/windows_preview.cpp`) keeps the host's sRGB
 default and its BGRA8. TIFF and PNG16 retain 16-bit pixels; PNG8/JPEG8 use
-8-bit samples, and resizing is explicitly requested. Output is SDR: EDR/HDR
-output is future work.
+8-bit samples, and resizing is explicitly requested. Print › Extended Dynamic Range uses the selected paper's calibrated SDR tone map on the canvas,
+proof and export. It is available with calibrated colour papers.
+
+Input / Camera › Lens Correction reads embedded Sony ARW distortion and supported DNG OpcodeList3
+radial profiles. Load LCP selects an external rectilinear RAW Adobe lens profile for this photo and
+enables correction. Its distortion calibration is saved with the edit, so the file can later be moved.
+Remove profile restores the embedded profile where one is available.
+
+The header shows the filename, camera, aperture, shutter speed, ISO, lens and image dimensions.
+It omits missing EXIF fields.
+
+Beside Zoom In, click the grid icon to show or hide the last selected style. Its arrow offers
+a centre crosshair, thirds (the initial style) and a dense square grid centred on the viewport.
+The short side spans about ten squares and the long side extends at the same spacing. Guides stay fixed to the
+viewport while the photograph is zoomed or panned. They are excluded from exports.
 
 Nikon HE/HE* RAW remains explicitly unsupported by this LibRaw build. A failed
 NEF open must leave the previous photo and its session usable.

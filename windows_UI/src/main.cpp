@@ -11,6 +11,7 @@
 #include "ColorPipeline.hpp"
 #include "FrameCanvas.hpp"
 #include "FrameImage.hpp"
+#include "image_io.hpp"
 #include "Localizer.hpp"
 #include "UiFonts.hpp"
 #include "Messages.hpp"
@@ -39,6 +40,7 @@
 #include <functional>
 #include <QTimer>
 #include <QtCore/qfloat16.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -365,11 +367,14 @@ private:
                 checks_["display_target"]=ColorPipeline::forWindow(&window_)->displayName();
                 if(!capture("fit"))return;
                 if(!require(canvas_->fit()&&canvas_->image().cacheKey()==controller_.previewImage().cacheKey(),"canvas_matches_published_frame"))return;
+                if (!checkPhotoHeader() || !checkGridModes()) return;
                 canvas_->resetView(false);
                 later([this]{
                     const auto rect=canvas_->imageRect();
                     const auto ratio=window_.effectiveDevicePixelRatio();
                     if(!require(std::abs(rect.width()*ratio-original_->width())<0.01&&std::abs(canvas_->scalePercent()-100)<1e-9,"physical_100_percent"))return;
+                    if (!require(gridFillsViewport(), "grid_fixed_after_zoom")) return;
+                    editor()->setProperty("gridVisible", false);
                     if(!capture("100-percent"))return;
                     // Interior canvas samples prove the texture is displaying
                     // this frame at one physical pixel per source pixel,
@@ -380,12 +385,16 @@ private:
                     // identity: pixel()'s rounding to 8 bits), so this stays
                     // exact.
                     if(!require(sourcePixelsExact(canvas_->paintColour()),"100_percent_source_pixels_exact"))return;
+                    editor()->setProperty("gridStyle", 3);
+                    editor()->setProperty("gridVisible", true);
                     canvas_->panBy(1e9,1e9);const auto edge=canvas_->imageRect();
                     canvas_->panBy(-1,-1);const auto back=canvas_->imageRect();
                     // At 100 % the image origin snaps to the physical pixel grid
                     // (FrameCanvas::imageRect), so at a fractional scale (150 %)
                     // a one-point pan moves it by a whole number of physical
                     // pixels: within one physical pixel of one point, never 0.
+                    if (!require(gridFillsViewport(), "grid_fixed_after_pan") || !capture("viewport-thirds")) return;
+                    editor()->setProperty("gridVisible", false);
                     const double slack=1.0/ratio+0.01;
                     const auto moved=[slack](double before,double after){const double d=before-after;return d>0.01&&std::abs(d-1)<slack;};
                     if(!require((edge.width()<=canvas_->width()||moved(edge.x(),back.x()))&&
@@ -818,6 +827,99 @@ private:
         if(!require(plot&&plot->isVisible()&&plot->width()==200&&plot->height()==56,"histogram_overlay_shown"))return;
         if(!capture("histogram"))return;
         checkZoom();
+    }
+    bool gridFillsViewport() const {
+        const auto* grid = window_.findChild<QQuickItem*>("alignmentGrid");
+        return grid && grid->isVisible() && grid->size() == canvas_->size() &&
+               grid->mapToScene(QPointF()) == canvas_->mapToScene(QPointF());
+    }
+    bool checkPhotoHeader() {
+        const auto* line = window_.findChild<QQuickItem*>("photoHeader");
+        if (!require(line && line->isVisible(), "photo_header_visible")) return false;
+        const QString header = line->property("text").toString();
+        checks_["photo_header"] = header;
+        spkhost::Probe probe;
+        std::string error;
+        if (!require(spkhost::probe_file(original_->source, probe, error), "read_header_reference")) return false;
+        const auto& shot = probe.metadata;
+        return require(header.contains(controller_.fileName()) &&
+                       header.contains(QString::fromStdString(shot.model).trimmed(), Qt::CaseInsensitive) &&
+                       header.contains(QString::fromStdString(shot.lens).trimmed()) &&
+                       (!shot.iso || header.contains("ISO " + QString::number(qRound(*shot.iso)))) &&
+                       (!shot.aperture || header.contains("f/")) &&
+                       (!shot.shutter_s || header.contains(" s")), "header_matches_source_exif");
+    }
+    bool checkSquareGrid(QQuickItem* grid) {
+        std::vector<double> xs, ys;
+        for (auto* item : grid->childItems()) {
+            const auto vertical = item->property("vertical");
+            if (!vertical.isValid()) continue;
+            if (vertical.toBool()) xs.push_back(item->x() + 1);
+            else ys.push_back(item->y() + 1);
+        }
+        std::sort(xs.begin(), xs.end());
+        std::sort(ys.begin(), ys.end());
+        if (!require(xs.size() >= 2 && ys.size() >= 2, "dense_grid_has_cells")) return false;
+        const double pitch = xs[1] - xs[0];
+        checks_["dense_grid_cell_width"] = pitch;
+        checks_["dense_grid_cell_height"] = ys[1] - ys[0];
+        const auto coversAxis = [pitch](const std::vector<double>& lines, double span) {
+            if (pitch <= 0 || lines.front() <= 0 || lines.front() > pitch ||
+                lines.back() >= span || span - lines.back() > pitch) return false;
+            for (std::size_t i = 1; i < lines.size(); ++i)
+                if (lines[i] - lines[i-1] != pitch) return false;
+            return std::binary_search(lines.begin(), lines.end(), std::round(span / 2));
+        };
+        return require(gridFillsViewport() && coversAxis(xs, grid->width()) && coversAxis(ys, grid->height()),
+                       "dense_grid_centered_square_cells") && capture("viewport-dense");
+    }
+    bool checkGridModes() {
+        auto* grid = window_.findChild<QQuickItem*>("alignmentGrid");
+        if (!require(grid && !grid->isVisible(), "grid_starts_off")) return false;
+        auto* toggle = window_.findChild<QQuickItem*>("gridToggleButton");
+        auto* arrow = window_.findChild<QQuickItem*>("gridStyleButton");
+        auto* menu = window_.findChild<QObject*>("gridStyleMenu");
+        if (!require(toggle && arrow && menu, "grid_toolbar_controls")) return false;
+        const auto click = [this](QQuickItem* item) {
+            const auto point = item->mapToScene(item->boundingRect().center());
+            mouse(QEvent::MouseButtonPress, point, Qt::LeftButton, Qt::LeftButton);
+            mouse(QEvent::MouseButtonRelease, point, Qt::LeftButton, Qt::NoButton);
+        };
+        mouse(QEvent::MouseMove, toggle->mapToScene(toggle->boundingRect().center()), Qt::NoButton, Qt::NoButton);
+        if (!require(toggle->property("hovered").toBool(), "grid_button_hovered") || !capture("grid-hover")) return false;
+        for (int divisions : {2, 3, 10}) {
+            click(arrow);
+            if (!require(menu->property("visible").toBool(), "grid_style_menu_opens")) return false;
+            if (divisions == 2 && !capture("grid-styles")) return false;
+            auto* option = window_.findChild<QQuickItem*>(QStringLiteral("gridStyle%1").arg(divisions));
+            if (!require(option, "grid_style_option")) return false;
+            click(option);
+            if (!require(!menu->property("visible").toBool() && option->property("marked").toBool()
+                         && toggle->property("checked").toBool(), "grid_style_selected")) return false;
+            if (divisions == 10) {
+                if (!checkSquareGrid(grid)) return false;
+            } else {
+                int lines = 0;
+                for (auto* item : grid->childItems()) {
+                    if (!item->property("vertical").isValid()) continue;
+                    const bool vertical = item->property("vertical").toBool();
+                    const auto span = vertical ? grid->width() : grid->height();
+                    const auto at = (vertical ? item->x() : item->y()) + 1;
+                    const int line = lines % (divisions - 1) + 1;
+                    if (!require(std::abs(at - std::round(span * line / divisions)) < 1,
+                                 QStringLiteral("grid_line_%1_%2").arg(divisions).arg(lines))) return false;
+                    ++lines;
+                }
+                if (!require(gridFillsViewport() && lines == 2*(divisions-1),
+                             QStringLiteral("viewport_grid_%1").arg(divisions))) return false;
+            }
+            click(toggle);
+            if (!require(!grid->isVisible() && !toggle->property("checked").toBool(), "grid_toggle_off")) return false;
+            click(toggle);
+            if (!require(gridFillsViewport() && editor()->property("gridDivisions").toInt() == divisions,
+                         "grid_toggle_restores_style")) return false;
+        }
+        return true;
     }
     void checkZoom() {
         const double ratio=window_.effectiveDevicePixelRatio();

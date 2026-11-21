@@ -291,6 +291,9 @@ int main(int argc, char** argv) {
             // default, and a record from before them loads each as `absent`.
             check(store.load(url, catalog).state == std::optional(state), "record before the new rows");
             auto extended = state;
+            extended.settings.set("extended_dynamic_range", true);
+            extended.settings.set("lens_correction", true);
+            extended.settings.set("lens_profile", std::string(R"({"name":"user.lcp","radial":[-0.04,0,0],"center":[0.5,0.5]})"));
             extended.settings.set("auto_exposure", false);
             extended.settings.set("scan_film", true);
             extended.settings.set("print_effects", false);
@@ -303,7 +306,7 @@ int main(int argc, char** argv) {
             extended.settings.set("grain_sublayers_active", false);
             store.save(url, extended);
             check(store.load(url, catalog).state == std::optional(extended), "the new rows did not round-trip");
-            const QStringList added{"auto_exposure", "scan_film", "print_effects", "preflash_exposure",
+            const QStringList added{"extended_dynamic_range", "lens_correction", "lens_profile", "auto_exposure", "scan_film", "print_effects", "preflash_exposure",
                                     "antihalation_removed", "halation_scatter_amount", "halation_boost_ev",
                                     "dir_couplers_active", "dir_couplers_amount", "grain_sublayers_active"};
             auto before = QJsonDocument::fromJson(read(path)).object();

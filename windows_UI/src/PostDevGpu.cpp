@@ -59,7 +59,7 @@ struct GradePass {
 };
 class Compute {
 public:
-  std::mutex mutex;
+  std::recursive_mutex mutex;
   ComPtr<ID3D11Device> device;
   ComPtr<ID3D11DeviceContext> context;
   Shader analyze, quantiles, box, resize, histogram, normalize, grade;
@@ -425,10 +425,11 @@ std::vector<float> gpuHistogramFrom(const QImage &image, QSize dimensions, ID3D1
 std::vector<float> gpuHistogram(const QImage &image, int stride) {
   return gpuHistogramFrom(image, image.size(), nullptr, stride);
 }
+std::recursive_mutex& analysisMutex() { return compute().mutex; }
 ID3D11Device* analysisDevice() { return compute().device.Get(); }
 
 void analyzeDisplay(ID3D11Texture2D* texture, const QColorSpace& space, QSize bound, double histogramSamples,
-                    QImage& navigator, QImage& guide, std::vector<float>& histogram) {
+                    QImage& navigator, QImage& guide, std::vector<float>& histogram, bool needGuide) {
   D3D11_TEXTURE2D_DESC td{};
   texture->GetDesc(&td);
   QSize size(int(td.Width), int(td.Height));
@@ -440,7 +441,7 @@ void analyzeDisplay(ID3D11Texture2D* texture, const QColorSpace& space, QSize bo
   navigator = gpuDownscaledFrom({},size,view.Get(),reducedSize);
   navigator.setColorSpace(space);
   const auto mid = midGreyFor(space);
-  if (mid) guide = gpuToneGuideFrom({},size,view.Get(),Grade(Params{},*mid,space).uniforms().toneSpace);
+  if (mid && needGuide) guide = gpuToneGuideFrom({},size,view.Get(),Grade(Params{},*mid,space).uniforms().toneSpace);
   const int stride = std::max(1,int(std::sqrt(double(td.Width)*td.Height/histogramSamples)));
   histogram = gpuHistogramFrom({},size,view.Get(),stride);
 }

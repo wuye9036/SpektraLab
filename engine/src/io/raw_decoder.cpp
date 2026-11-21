@@ -103,6 +103,14 @@ bool capture_source_metadata(const LibRaw& raw, RawMetadata& metadata,
         metadata.camera_white_level_per_channel[c] = color.linear_max[c];
     }
     metadata.camera_raw = true;
+    metadata.focal_mm = data.other.focal_len;
+    metadata.iso = data.other.iso_speed;
+    auto lensName = [](const auto& field) {
+        return std::string(std::begin(field), std::find(std::begin(field), std::end(field), '\0'));
+    };
+    metadata.lens_model = lensName(data.lens.Lens);
+    if (metadata.lens_model.find_first_not_of(' ') == std::string::npos)
+        metadata.lens_model = lensName(data.lens.makernotes.Lens);
     // identify() copies the tag into imgdata.color without its parsed-field
     // bit; an absent tag keeps LibRaw's -999 sentinel, which the range drops.
     const float baseline = data.color.dng_levels.baseline_exposure;
@@ -145,6 +153,7 @@ bool capture_source_metadata(const LibRaw& raw, RawMetadata& metadata,
 // with the stream at the tag's value.
 struct ExifTags {
     std::string date;
+    EmbeddedLens::Curve sony_distortion;
     int program = 0;
     bool has_bias = false;
     double bias = 0.0;
@@ -160,6 +169,22 @@ void exif_tag(void* context, int tag, int type, int len, unsigned int order, voi
     auto& tags = *static_cast<ExifTags*>(context);
     auto* in = static_cast<LibRaw_abstract_datastream*>(stream);
     unsigned char b[32] = {};
+    // LibRaw encodes the TIFF IFD in the high bits. Sony's 0x7037 is a
+    // counted array of signed distortion knots in units of 2^-14.
+    if ((tag & 0xffff) == 0x7037 && (type == 8 || type == 3) && len >= 3 && len <= 256) {
+        if (in->read(b, 1, 2) != 2) return;
+        const int count = int(exif_word(b, 2, order));
+        if (count < 2 || count >= len) return;
+        EmbeddedLens::Curve curve;
+        for (int i = 0; i < count; ++i) {
+            if (in->read(b, 1, 2) != 2) return;
+            const float scale = 1.f + std::int16_t(exif_word(b, 2, order)) / 16384.f;
+            if (scale <= 0) return;
+            curve.push_back(scale);
+        }
+        if (std::any_of(curve.begin(), curve.end(), [](float v) { return v != 1; }))
+            tags.sony_distortion = std::move(curve);
+    }
     if (tag == 0x9003 && type == 2 && len >= 10 && tags.date.empty()) {  // DateTimeOriginal
         const int n = std::min(len, 31);
         if (in->read(b, 1, n) == n) tags.date.assign(reinterpret_cast<const char*>(b), std::size_t(std::min(n, 19)));
@@ -171,6 +196,19 @@ void exif_tag(void* context, int tag, int type, int len, unsigned int order, voi
             if (den != 0) { tags.has_bias = true; tags.bias = double(num) / double(den); }
         }
     }
+}
+
+EmbeddedLens embedded_profile(const LibRaw& raw, const ExifTags& tags) {
+    if (raw.imgdata.idata.dng_version) {
+        const auto& op = raw.imgdata.color.dng_levels.rawopcodes[2];
+        if (op.data) return dng_lens({static_cast<const std::uint8_t*>(op.data), op.len});
+    } else if (std::strncmp(raw.imgdata.idata.make, "Sony", 4) == 0 ||
+               std::strncmp(raw.imgdata.idata.make, "SONY", 4) == 0) {
+        EmbeddedLens lens;
+        lens.scales[0] = tags.sony_distortion;
+        return lens;
+    }
+    return {};
 }
 
 // ShootingData.init(exif:) and .day(_:) (Session+FilmEdge.swift:58-79): a
@@ -239,9 +277,14 @@ bool supported_headroom_source(LibRaw& raw, std::string& error) {
     return true;
 }
 
+// LibRaw checks the progress callback in demosaic and its cancel flag in unpack.
+int raw_progress(void* context, LibRaw_progress, int, int) {
+    return static_cast<const std::stop_token*>(context)->stop_requested() ? 1 : 0;
+}
+
 class HeadroomLibRaw final : public LibRaw {
 public:
-    HeadroomLibRaw() : LibRaw(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK) {}
+    explicit HeadroomLibRaw(std::stop_token stop) : LibRaw(LIBRAW_OPTIONS_NO_DATAERR_CALLBACK), stop_(stop) {}
 
     std::vector<float> converted;
     std::uint32_t converted_width = 0, converted_height = 0;
@@ -250,6 +293,9 @@ public:
     double conversion_ms = 0.0;
     bool conversion_finished = false;
     std::string conversion_error;
+
+private:
+    std::stop_token stop_;
 
 protected:
     void convert_to_rgb_loop(float out_cam[3][4]) override {
@@ -271,7 +317,7 @@ protected:
         conversion_finished = detail::convert_camera_rgb_headroom(
             imgdata.image[0], std::size_t(sizes.width) * sizes.height,
             sizes.width, sizes.height, sizes.flip, matrix, exposure_restore,
-            converted, converted_width, converted_height, conversion_error);
+            converted, converted_width, converted_height, conversion_error, stop_);
         conversion_ms = elapsed_ms(start);
         // dcraw_process may continue its bookkeeping; no clipped uint16 output
         // is subsequently used, and the supported square-pixel Bayer inputs
@@ -287,7 +333,7 @@ bool decode_raw_compatible(const std::filesystem::path& source,
 }
 
 bool decode_raw_compatible(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                           DecodedRaw& out, std::string& error) {
+                           DecodedRaw& out, std::string& error, std::stop_token stop) {
     error.clear();
     const auto total_start = Clock::now();
     try {
@@ -322,8 +368,12 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
         if (!libraw_ok(open_status, "RAW open", error)) return false;
         if (!supported_compression(*raw, error)) return false;
         capture_shooting_data(*raw, exif, decoded.metadata.shooting);
+        decoded.metadata.lens_profile = embedded_profile(*raw, exif);
 
         start = Clock::now();
+        if (stop.stop_possible()) raw->set_progress_handler(&raw_progress, &stop);
+        std::stop_callback cancel(stop, [&] { raw->setCancelFlag(); });
+        if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
         const int unpack_status = raw->unpack();
         decoded.timings.unpack_ms = elapsed_ms(start);
         if (!libraw_ok(unpack_status, "RAW unpack", error)) return false;
@@ -335,6 +385,7 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
         if (const char* name = raw->unpack_function_name()) decoded.metadata.decoder_name = name;
 
         start = Clock::now();
+        if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
         const int process_status = raw->dcraw_process();
         decoded.timings.process_ms = elapsed_ms(start);
         if (!libraw_ok(process_status, "RAW process", error)) return false;
@@ -364,6 +415,7 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
 
         // This also performs LibRaw's final orientation and identity gamma
         // lookup. Reading imgdata.image directly would omit those semantics.
+        if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
         start = Clock::now();
         int image_status = LIBRAW_SUCCESS;
         using ImagePtr = std::unique_ptr<libraw_processed_image_t,
@@ -392,12 +444,16 @@ bool decode_raw_compatible(const std::filesystem::path& source, const std::array
                 table[v] = static_cast<float>(static_cast<double>(v) / 65535.0);
             return table;
         }();
-        for (std::size_t i = 0; i < decoded.rgb.size(); ++i) {
-            std::uint16_t value;
-            // LibRaw returns native-endian 16-bit samples. memcpy avoids
-            // imposing alignment or aliasing assumptions on its byte array.
-            std::memcpy(&value, image->data + i * sizeof(value), sizeof(value));
-            decoded.rgb[i] = code_to_float[value];
+        for (std::size_t y = 0; y < decoded.height; ++y) {
+            if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
+            const auto end = (y + 1) * decoded.width * 3;
+            for (std::size_t i = y * decoded.width * 3; i < end; ++i) {
+                std::uint16_t value;
+                // LibRaw returns native-endian 16-bit samples. memcpy avoids
+                // imposing alignment or aliasing assumptions on its byte array.
+                std::memcpy(&value, image->data + i * sizeof(value), sizeof(value));
+                decoded.rgb[i] = code_to_float[value];
+            }
         }
         decoded.timings.convert_ms = elapsed_ms(start);
         decoded.timings.total_ms = elapsed_ms(total_start);
@@ -418,7 +474,7 @@ bool decode_raw_headroom(const std::filesystem::path& source,
 }
 
 bool decode_raw_headroom(const std::filesystem::path& source, const std::array<float, 4>* user_mul,
-                         DecodedRaw& out, std::string& error) {
+                         DecodedRaw& out, std::string& error, std::stop_token stop) {
     error.clear();
     const auto total_start = Clock::now();
     try {
@@ -426,7 +482,7 @@ bool decode_raw_headroom(const std::filesystem::path& source, const std::array<f
             error = "RAW open: source path is empty";
             return false;
         }
-        auto raw = std::make_unique<HeadroomLibRaw>();
+        auto raw = std::make_unique<HeadroomLibRaw>(stop);
         configure_compatible(raw->imgdata.params);
         // LibRaw's Ignore mode prevents WB multipliers above one, but does not
         // reconstruct sensor saturation and still uses uint16 intermediates.
@@ -453,8 +509,12 @@ bool decode_raw_headroom(const std::filesystem::path& source, const std::array<f
         if (!libraw_ok(open_status, "RAW open", error)) return false;
         if (!supported_compression(*raw, error)) return false;
         capture_shooting_data(*raw, exif, decoded.metadata.shooting);
+        decoded.metadata.lens_profile = embedded_profile(*raw, exif);
 
         start = Clock::now();
+        if (stop.stop_possible()) raw->set_progress_handler(&raw_progress, &stop);
+        std::stop_callback cancel(stop, [&] { raw->setCancelFlag(); });
+        if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
         const int unpack_status = raw->unpack();
         decoded.timings.unpack_ms = elapsed_ms(start);
         if (!libraw_ok(unpack_status, "RAW unpack", error)) return false;
@@ -467,6 +527,7 @@ bool decode_raw_headroom(const std::filesystem::path& source, const std::array<f
         if (const char* name = raw->unpack_function_name()) decoded.metadata.decoder_name = name;
 
         start = Clock::now();
+        if (stop.stop_requested()) { error = "RAW decode cancelled"; return false; }
         const int process_status = raw->dcraw_process();
         const double process_and_conversion_ms = elapsed_ms(start);
         decoded.timings.process_ms = std::max(0.0, process_and_conversion_ms - raw->conversion_ms);

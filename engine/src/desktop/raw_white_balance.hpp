@@ -50,6 +50,7 @@ const std::vector<WhiteBalancePreset>& white_balance_presets();
 
 // Whether two settings decode the same pixels: both As Shot, or both the same
 // Temperature and Tint (a preset and Custom at its numbers are one decode).
+bool imported_lens_profile(const std::string& record, io::EmbeddedLens& lens);
 bool same_decode(const RenderSettings& a, const RenderSettings& b);
 
 // The camera's own illuminant, as Temperature/Tint, from a decode's metadata
@@ -77,7 +78,7 @@ bool as_shot_white_balance(const io::RawMetadata& metadata, double& temperature,
 // on macOS) and `mode` changes nothing. `metadata.decoder_name` names the
 // file and the space it was read in ("TIFF, sRGB IEC61966-2.1").
 bool decode_raw(const std::filesystem::path& source, DecodeMode mode, const RenderSettings& settings,
-                io::DecodedRaw& out, std::string& error);
+                io::DecodedRaw& out, std::string& error, std::stop_token stop = {});
 
 // Whether `source` is a flat (encoded) file the decode above reads through
 // image_io rather than LibRaw: by its signature, as image_io sniffs it, for
@@ -95,6 +96,9 @@ bool flat_file(const std::filesystem::path& source);
 // Decoding with that answer gives multipliers proportional to 1 / c: the
 // patch comes out with R = G = B, which is what spk_qt_predev checks on a
 // synthetic camera.
+
+// Change WB on a small, already decoded linear image for interactive feedback.
+bool preview_white_balance(io::DecodedRaw& image, const WhiteBalance& target);
 
 // The camera-to-output matrix the decode applied (row-major 3 x 3): LibRaw's
 // out_cam -- its ProPhoto table times rgb_cam (convert_to_rgb), or under the

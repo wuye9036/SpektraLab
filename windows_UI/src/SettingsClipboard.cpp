@@ -40,7 +40,7 @@ const std::vector<GroupInfo>& groups() {
           "halation_amount", "antihalation_removed", "halation_scatter_amount", "halation_boost_ev",
           "dir_couplers_active", "dir_couplers_amount", "glare_active", "glare_amount"}},
         // Pre-flash is gated by the Print Effects switch already.
-        {Group::printEffects, "printEffects", {"print_effects", "preflash_exposure"}},
+        {Group::printEffects, "printEffects", {"print_effects", "preflash_exposure", "extended_dynamic_range"}},
         {Group::scenePlacement, "scenePlacement",
          {"scene_latitude_active", "scene_latitude_norm", "scene_latitude_highlight_knee",
           "scene_latitude_highlight_room", "scene_latitude_shadow_knee", "scene_latitude_shadow_room",
@@ -86,6 +86,8 @@ const std::vector<NotCopied>& notCopied() {
         // Undecided on macOS (answer sheet F10): whether Film Edge and Date
         // Back become a group. Until then neither is copied, and the seeds and
         // the resolved text would be the source photograph's anyway.
+        {"lens_correction", "Lens correction belongs to the source photograph"},
+        {"lens_profile", "The LCP calibration is resolved for the source camera and focal length"},
         {"overscan_*", "Film Edge: not copied until a group is decided (F10)"},
         {"film_edge_seeded", "Film Edge: whether this photograph has its own seeds"},
         {"date_imprint_*", "Date Back: not copied until a group is decided (F10)"},

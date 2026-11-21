@@ -23,6 +23,7 @@ QtObject {
     readonly property string redo: "\uE7A6"
     readonly property string zoomIn: "\uE8A3"          // plus.magnifyingglass
     readonly property string zoomOut: "\uE71F"         // minus.magnifyingglass
+    readonly property string gridView: "\uF0E2"       // GridView
     readonly property string rotate: "\uE7AD"          // rotate.right; mirrored for rotate.left
     readonly property string flip: "\uE8AB"            // flip; turned 90 degrees for vertical
     readonly property string reset: "\uE777"           // arrow.counterclockwise

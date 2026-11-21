@@ -149,6 +149,48 @@ Item {
             enabled: false
         }
     }
+    Item {
+        id: guides
+        objectName: "alignmentGrid"
+        anchors.fill: parent
+        visible: preview.hasFrame && view.editor.gridDivisions > 0
+        enabled: false
+
+        readonly property int divisions: view.editor.gridDivisions
+        readonly property bool dense: divisions === 10
+        // About ten squares across the short side, with the same pixel pitch on both axes.
+        readonly property int pitch: Math.max(12, Math.round(Math.min(width, height) / 10))
+        function firstLine(span) {
+            return Math.round(span / 2) % pitch || pitch
+        }
+        function lineCount(span) {
+            if (!dense) return Math.max(0, divisions - 1)
+            return Math.max(0, Math.ceil((span - firstLine(span)) / pitch))
+        }
+        function position(span, index) {
+            if (dense) return firstLine(span) + index * pitch
+            return Math.round(span * (index + 1) / Math.max(1, divisions))
+        }
+        readonly property int verticalLines: lineCount(width)
+        Repeater {
+            model: guides.visible ? guides.verticalLines + guides.lineCount(guides.height) : 0
+            delegate: Rectangle {
+                required property int index
+                readonly property bool vertical: index < guides.verticalLines
+                x: vertical ? guides.position(guides.width, index) - 1 : 0
+                y: vertical ? 0 : guides.position(guides.height, index - guides.verticalLines) - 1
+                width: vertical ? 3 : guides.width
+                height: vertical ? guides.height : 3
+                color: "#50000000"
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: parent.vertical ? 1 : parent.width
+                    height: parent.vertical ? parent.height : 1
+                    color: "#bbffffff"
+                }
+            }
+        }
+    }
     CropOverlay { canvas: frameCanvas; editor: view.editor }
     PairOverlay { canvas: frameCanvas; editor: view.editor }
     // The split's furniture: the line, the grip and the two labels. The line

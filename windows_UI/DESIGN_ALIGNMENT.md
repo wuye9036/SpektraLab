@@ -13,13 +13,13 @@
 | 左栏标题 | Film and Print | 已实现，布局与 Mac 编辑器一致，可折叠、可调宽 |
 | 导航图 | Navigator、Fit | 已实现：1024 px 导航图、视口框、Fit 与缩放比例 |
 | 胶片 | Film、Positive、Negative；Provia 100f、Velvia 50、Ektarchrome 100、C200、Pro 400H、gold 200、Vision 50D | 已实现：按 Mac 目录分为 Positive / Negative / Black & White 三组（含四款黑白胶片）。实际选项使用引擎目录，不把设计稿里的型号/拼写当作新材质 |
-| 相纸 | Print；Crystal Archive Type II、Ektacolor Edge、Endura Premier、Portra Endura、Super Endura、Ultra Endura、Vision 2383、Vision Premier 2393 | 已实现：Mac 的相纸目录与规则（反转片不经过相纸；黑白胶片配 Multigrade IV RC），Print Effects 已接入。仍缺：Extended Dynamic Range (EDR)，因 Windows 尚无 HDR 输出，灰显并说明；Digital 组（画布上的 Cineon 视图）灰显，DI 导出可用 |
+| 相纸 | Print；Crystal Archive Type II、Ektacolor Edge、Endura Premier、Portra Endura、Super Endura、Ultra Endura、Vision 2383、Vision Premier 2393 | 已实现：Mac 的相纸目录与规则（反转片不经过相纸；黑白胶片配 Multigrade IV RC），Print Effects 和带标定曲线的相纸 EDR 已接入；Digital 组（画布上的 Cineon 视图）灰显，DI 导出可用 |
 | 左栏下方 | Crop、Enlarger | 已实现：裁切（自由/比例、旋转、翻转、拉直、裁切手柄）；放大机曝光 −3..3 档、黄/洋红滤镜、预闪光。另有 Settings Clipboard、Film Edge、Date Back |
 | 顶栏 | 导入/导出/指针/裁切图标，Solve、Original、分屏图标、100%、缩放图标 | 已实现：导入、导出页、裁切、Process（即 Solve：自动曝光与滤镜组）、Original（Space 按住显示）、前后对比分屏、缩放阶梯与 Fit/100%、Soft Proof 与色域警告、应用菜单 |
 | 下方照片条 | 七张照片缩略图及左右箭头 | 已实现：整张照片加裁切外遮罩的缩略图、文件夹导入（Finder 顺序）、拖动排序并按文件夹保存、Ctrl+点击多选、全选、同步与复制/粘贴设置、半格双拼条目 |
 | 右栏标题 | Parameters、Pre-Dev、Post-Dev | 已实现：Pre-Dev 与 Post-Dev（Layer 2：白平衡、曝光、曲线、色彩平衡、暗角），按 Mac 的顺序与算法 |
 | 宽容度 | Latitude、Portra 400 · Supra Endura、−4.10、+2.25；Below 2.9%、Within 67.1%、Above 30.0%；6.35 stops held、full separation −1.96 to +1.79 | 已实现：由引擎的宽容度读数绘制，与 Mac 的 `LatitudePlot` 相同；数字为实际测量值，不是设计稿示意值 |
-| 输入/相机 | Input / Camera、Metering、Custom、Film Exposure、+0.0、As Shot、Temperature、5500、Tint、+0.0、Vignetting、Lens Correction | 已实现：测光（含 Custom）、胶片曝光及 As Shot、解码白平衡（色温、色调、As Shot、预设、取中性点），暗角（Post-Dev 的镜头暗角，与 Mac 相同）。仍缺：Lens Correction，LibRaw 无镜头配置，灰显并说明 |
+| 输入/相机 | Input / Camera、Metering、Custom、Film Exposure、+0.0、As Shot、Temperature、5500、Tint、+0.0、Vignetting、Lens Correction | 已实现：测光（含 Custom）、胶片曝光及 As Shot、解码白平衡（色温、色调、As Shot、预设、取中性点），暗角（Post-Dev 的镜头暗角，与 Mac 相同）。镜头校正支持 Sony ARW、DNG 内嵌径向配置及外部 RAW LCP 畸变配置 |
 | 胶片画幅 | Film Format、Size、135、Side、Short、Side Length、24 mm、Grain/Strength、Halation/Strength、Glare/Strength，强度均为 1.0 | 已实现：真实画幅尺度及全部效果开关/强度（颗粒、晕光与防晕层、散射、高光提升、DIR 耦合、眩光）；默认 35 mm，不因示意值改变效果 |
 | 场景映射 | Scene Placement、Highlight 0、Shadow 0 | 已实现：引擎的场景宽容度映射已移植，按 Mac 的 Fit 规则提交 |
 | 色调遮罩 | Tone Mask | 已实现：引擎的反差遮罩（RFC-024）已移植。Mac 用功能开关隐藏此区；Windows 显示并默认折叠 |
@@ -44,7 +44,7 @@
 
 ## 与 Mac 相比仍缺
 
-- Lens Correction（LibRaw 无镜头配置）；EDR 打印与 HDR 输出；画布上的 Cineon（Digital）视图。
+- HDR 显示与输出；画布上的 Cineon（Digital）视图。
 - Settings 中无 Windows 后端的项目灰显并说明：预览分辨率、快速相纸预览、DI 蓝色补偿、裁切改变胶片物理尺度、效果解耦、内存与磁盘缓存、日志与诊断包、更新检查、`spektralab` 命令行与 MCP 代理接口。
 - 移动或改名的源文件不会自动关联原有设置（Mac 用指纹识别）；撤销历史不跨重启保存。
 - 有意的差异：Mac 的照片条显示不含 Layer 2 的打印，Windows 的照片条显示调色后的画面（AGENTS.md trap 33）；软打样 Mac 只在导出页，Windows 在画布上。

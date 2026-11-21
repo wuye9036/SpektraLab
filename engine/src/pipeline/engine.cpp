@@ -23,6 +23,7 @@
 #ifdef _WIN32
 #include "gpu/d3d11_target.hpp"
 #endif
+#include "render_request.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -83,6 +84,9 @@ constexpr Tier kTiers[] = {{"live", 1600}, {"preview", 3400}, {"full", 0}};
 // constant, so a tier change cannot move auto exposure; when the live tier is
 // the same size its image is reused.
 constexpr uint32_t kMeterLongEdge = 1600;
+#ifdef _WIN32
+constexpr size_t kPreviewScratchBytes = 64u * 1024u * 1024u;
+#endif
 // The wire fields upstream of the auto-exposure node: the only ones that can
 // change what it meters, so the only ones that re-meter. The film, exposure
 // compensation and the method itself leave the cached meter valid.
@@ -218,6 +222,9 @@ struct spk_session {
         uint32_t image_long_edge = 0;
         Image negative;   // Tap.CMY_FILM
         bool has_negative = false;
+        // Retain only the seed if a pending replacement evicts this plane.
+        // Rebuilding a negative for a reprint must reproduce its grain.
+        std::optional<uint32_t> film_seed;
         /// RFC-032 §27: the frame `negative`'s film canvas was laid out for,
         /// so a reprint can lay it out again. Zero without overscan.
         uint32_t overscan_frame_w = 0, overscan_frame_h = 0;
@@ -1070,11 +1077,11 @@ bool ensure_meter(spk_session* session, std::string& error) {
 // stays exactly what ships, which is what makes §6's hash comparison mean
 // anything -- and one call site each, so the graph cannot drift between them.
 bool run_film_for(spk_session* session, const Image& source, Image& negative,
-                  Progress* progress, std::string& error) {
+                  Progress* progress, std::string& error, std::optional<uint32_t> replay_seed) {
     if (session->params.settings.striped) {
-        return session->pipeline->run_film_striped(source, negative, progress, error);
+        return session->pipeline->run_film_striped(source, negative, progress, error, replay_seed);
     }
-    return session->pipeline->run_film(source, negative, progress, error);
+    return session->pipeline->run_film(source, negative, progress, error, replay_seed);
 }
 
 bool run_print_for(spk_session* session, const Image& negative, Image& rgb,
@@ -1102,14 +1109,11 @@ bool negative_for(spk_session* session, const Tier& tier, Progress* progress, Im
         camera.auto_exposure ? std::optional<double>(session->meter.evs.of(camera.auto_exposure_method))
                              : std::nullopt);
     Image negative;
-    if (!run_film_for(session, source, negative, progress, error)) return false;
+    if (!run_film_for(session, source, negative, progress, error, state.film_seed)) return false;
     state.applied_ev = session->pipeline->last_auto_exposure_ev();
     session->pipeline->overscan_frame(state.overscan_frame_w, state.overscan_frame_h);
     if (progress) progress->auto_exposure_ev = state.applied_ev;
-    // The negative is what every subsequent slider drag reprints from, so it
-    // has to outlive the frame arena. Copying it here is also what makes a
-    // reprint grain-consistent for free: the realisation is baked in and is
-    // never redrawn.
+    // Every reprint reuses this negative, including its grain realisation.
     gpu::Gpu* gpu = session->engine->gpu;
     if (!gpu->flush(error)) return false;
     Image kept;
@@ -1117,9 +1121,9 @@ bool negative_for(spk_session* session, const Tier& tier, Progress* progress, Im
     // The cached negative is the other holding RFC-020 §4.7 names: every
     // reprint reads it, it lives as long as the session, and at the full
     // tier it is the second 1.22 GB plane.
-    kept.buf = gpu->alloc_file_backed(negative.bytes(), error);
-    if (!kept.buf || !gpu->copy(kept.buf.get(), 0, negative.buf.get(), 0,
-                                negative.bytes(), error)) return false;
+    kept.buf = gpu->cache_negative(negative.buf, negative.bytes(), error);
+    if (!kept.buf) return false;
+    state.film_seed = session->pipeline->last_film_seed();
     state.negative = kept;
     state.has_negative = true;
     out = kept;
@@ -1173,7 +1177,7 @@ bool materialise(spk_session* session, const Image& rgb, spk_result* out, std::s
 }
 
 spk_status render_tier(spk_session* session, const char* tier_name, bool use_reprint,
-                       spk_result* out
+                       spk_result* out, std::function<bool()> interrupted = {}
 #ifdef _WIN32
                        , gpu::D3D11Publication* display = nullptr, bool retainExact = false, bool fallback = false
 #endif
@@ -1192,6 +1196,7 @@ spk_status render_tier(spk_session* session, const char* tier_name, bool use_rep
     gpu::Gpu* gpu = session->engine->gpu;
     const auto started = std::chrono::steady_clock::now();
     session->progress = Progress{};
+    session->progress.interrupted = std::move(interrupted);
     session->progress.progress_id = "p" + std::to_string(next_id());
     // Opt-in, because turning it on serialises every node. See Progress.
     session->progress.detailed = std::getenv("SPEKTRAFILM_NODE_TIMINGS") != nullptr;
@@ -1203,12 +1208,13 @@ spk_status render_tier(spk_session* session, const char* tier_name, bool use_rep
     session->progress.memory_pressure_critical = gpu->take_critical_pressure();
     std::string error;
     const bool had_negative = session->tiers[tier->name].has_negative;
-    if (!use_reprint && had_negative) {
+    if (!use_reprint) {
         // `spk_render` is the `preview_render(layer: "shoot")` path: it exists
         // to force the film side to run. Without this it returned the cached
         // negative and was identical to `spk_reprint` in everything but the
         // flag it reported -- which happened to look right, because a
         // shoot-layer `set_params` drops the negative before this is reached.
+        session->tiers[tier->name].film_seed.reset();
         session->tiers[tier->name].negative = Image{};
         session->tiers[tier->name].has_negative = false;
     }
@@ -1236,13 +1242,19 @@ spk_status render_tier(spk_session* session, const char* tier_name, bool use_rep
         // allocating the shared canvas texture and its exact export codes.
         // Keep a small working set between interactive preview samples. The
         // full-resolution publication gives it back along with its own scratch.
-        constexpr size_t previewScratch = 64u * 1024u * 1024u;
-        gpu->trim_pool(tier->long_edge ? std::max(rgb.bytes(), previewScratch) : rgb.bytes());
+        gpu->trim_pool(tier->long_edge ? std::max(rgb.bytes(), kPreviewScratchBytes) : rgb.bytes());
         gpu::BufferRef exact;
         display->texture = gpu::make_d3d11_display(*gpu, rgb.buf.get(), rgb.w, rgb.h, *display, retainExact ? &exact : nullptr, error);
         if (display->texture) {
             out->width = rgb.w;
             out->height = rgb.h;
+            if (exact && display->allowGeometry) {
+                display->project = [gpu, exact](const gpu::DisplayGeometry& geometry,
+                        const gpu::D3D11Publication& target, std::string& why) {
+                    return gpu::make_d3d11_display(*gpu, exact.get(), geometry.outputWidth(), geometry.outputHeight(),
+                                                   target, nullptr, why, &geometry);
+                };
+            }
             if (exact) display->readPixels = [gpu, exact, w=rgb.w, h=rgb.h](spk_result& pixels, std::string& why) {
                 pixels.texture = gpu->texture(exact.get(), w, h, w, why);
                 pixels.rgba16 = static_cast<const uint16_t*>(pixels.texture);
@@ -1263,6 +1275,12 @@ spk_status render_tier(spk_session* session, const char* tier_name, bool use_rep
     if (ok && display && display->texture && std::getenv("SPEKTRAFILM_TRANSFER_TIMINGS"))
         std::fprintf(stderr, "{\"d3d11_display\":true,\"width\":%u,\"height\":%u,\"exact_gpu_bytes\":%zu}\n",
                      rgb.w, rgb.h, retainExact ? size_t(rgb.w)*rgb.h*8 : size_t(0));
+    if (display && !tier->long_edge) {
+        // Publication (or its host fallback) has consumed the float print.
+        // The earlier trim couldn't reclaim it while this Image held it.
+        rgb = {};
+        gpu->trim_pool(0);
+    }
 #endif
     gpu->end_frame();
 
@@ -1292,12 +1310,28 @@ spk_status spk_render(spk_session* session, const char* tier, spk_result* out) {
 
 }  // extern "C"
 
+void spk::discard_tier_cache(spk_session* session) {
+    std::lock_guard guard(session->lock);
+    for (auto& [name, state] : session->tiers) {
+        state.image = {};
+        state.negative = {};
+        state.has_negative = false;
+    }
+}
+
+spk_status spk::render_interruptible(spk_session* session, const char* tier, bool reprint, spk_result* out,
+                                     std::function<bool()> interrupted) {
+    return render_tier(session, tier, reprint, out, std::move(interrupted));
+}
+
 #ifdef _WIN32
 spk_status spk::gpu::render_d3d11(spk_session* session, const char* tier, bool reprint,
-                                  D3D11Publication& display, spk_result& metadata, bool retainExact, bool fallback) {
+                                  D3D11Publication& display, spk_result& metadata, bool retainExact, bool fallback,
+                                  std::function<bool()> interrupted) {
     display.texture.reset();
+    display.project = {};
     display.readPixels = {};
-    return render_tier(session, tier, reprint, &metadata, &display, retainExact, fallback);
+    return render_tier(session, tier, reprint, &metadata, std::move(interrupted), &display, retainExact, fallback);
 }
 #endif
 
@@ -1836,6 +1870,7 @@ spk_status spk_set_params(spk_session* session, const char* params_delta_json, c
 
     if (shoot || (stock_change && delta.has("film_stock"))) {
         for (auto& kv : session->tiers) {
+            kv.second.film_seed.reset();
             if (kv.second.has_negative) {
                 // Dropping the handle is the whole of it: the buffer goes back
                 // to the pool for the film side to reuse on the re-render.
@@ -2118,6 +2153,11 @@ spk_status spk_scene_latitude(spk_session* session, const char* request_json, ch
         }
     }
     gpu->end_frame();
+#ifdef _WIN32
+    // The editor measures the scene after presenting the frame. Downsampling
+    // for the meter can leave two full-size prefilter planes idle at this point.
+    gpu->trim_pool(kPreviewScratchBytes);
+#endif
     if (!ok) { g_error = error; return SPK_ERR_GPU; }
     if (cache.scene.samples == 0) { g_error = "scene latitude: the frame has no positive pixels"; return SPK_ERR_USER; }
 

@@ -97,7 +97,7 @@ Catalog test_catalog() {
              {"kodak_ektar_100", "Ektar 100", false, false, false, "kodak_portra_endura"},
              {"kodak_ektachrome_100", "Ektachrome 100", true},
              {"kodak_tri_x_400", "Tri-X 400", false, false, true, "ilford_multigrade_iv_rc"}},
-            {{"kodak_supra_endura", "Supra Endura", false}, {"kodak_portra_endura", "Portra Endura", false},
+            {{"kodak_supra_endura", "Supra Endura", false, false, false, {}, true}, {"kodak_portra_endura", "Portra Endura", false},
              {"ilford_multigrade_iv_rc", "Multigrade IV RC", false, false, true},
              {"kodak_2383", "Vision 2383", false, true}}};
 }
@@ -243,6 +243,8 @@ void settings_validation() {
                 check(error.find(field.label) != std::string::npos, "range error does not name the setting");
                 check(!check_setting(field, SettingValue(value)).empty(), "check_setting accepted a bad number");
             }
+        } else if (field.key == "lens_profile") {
+            check(check_setting(field, std::string("bad")).size() > 0, "invalid lens calibration accepted");
         } else if (field.type == SettingType::text && field.choices == SettingChoices::free) {
             // Free text: one short line of printable ASCII, nothing else.
             for (const std::string bad : {std::string(kFreeTextMax + 1, '1'), std::string("'26\n10 1"),
@@ -565,6 +567,8 @@ void film_edge_rules() {
 void settings_deltas() {
     const auto catalog = test_catalog();
     const RenderSettings base;
+    check(find_setting("extended_dynamic_range") && find_setting("lens_correction"),
+          "EDR and decode lens correction are missing from the editable settings");
     // Opening sends the host's I/O policy and wire_params: every wire row.
     const auto open = opening_params(base, catalog);
     std::size_t wire_rows = 0;
@@ -579,7 +583,17 @@ void settings_deltas() {
     // SpektraLab's defaults, as macOS asks for them (Session.swift openDelta):
     // without them Film Exposure barely moves the print.
     check(open.at("product_defaults").as_bool(false), "opening parameters do not ask for the product defaults");
-    check(open.fields().size() == wire_rows + 5 + 5, "opening parameters carry an unexpected field");
+    check(open.fields().size() == wire_rows + 4 + 5, "opening parameters carry an unexpected field");
+    RenderSettings edr = base;
+    edr.set("extended_dynamic_range", true);
+    check(opening_params(edr, catalog).at("extended_dynamic_range").as_bool() &&
+          changed_params(base, edr, catalog).at("extended_dynamic_range").as_bool(), "calibrated paper lost EDR");
+    auto scan = edr;
+    scan.set("scan_film", true);
+    check(!changed_params(edr, scan, catalog).at("extended_dynamic_range").as_bool(true), "direct scan retained EDR");
+    auto uncalibrated = edr;
+    uncalibrated.print_stock = "ilford_multigrade_iv_rc";
+    check(!opening_params(uncalibrated, catalog).at("extended_dynamic_range").as_bool(true), "uncalibrated paper enabled EDR");
     RenderSettings slide_open = base;
     slide_open.film_stock = "kodak_ektachrome_100";
     check(opening_params(slide_open, catalog).at("scan_film").as_bool(), "a slide opened printed");
@@ -1227,6 +1241,14 @@ void settings_engine(const fs::path& resources) {
     session_matches(current);
     Rendered opened;
     check(spk_render(session.get(), "full", &opened.result) == SPK_OK, "first render");
+    {
+        RenderSettings edr = current;
+        edr.set("extended_dynamic_range", true);
+        SessionPtr enabled = open(edr);
+        Rendered result;
+        check(spk_render(enabled.get(), "full", &result.result) == SPK_OK && opened.pixels() != result.pixels(),
+              "calibrated EDR did not change the rendered pixels");
+    }
     // Film Exposure moves the finished print, as on macOS (product_defaults
     // in the open): a stop over prints clearly brighter, where the reference
     // re-times the enlarger and holds the mid-grey (AGENTS.md trap 30).
