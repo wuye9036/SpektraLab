@@ -2,3 +2,26 @@
 // and Qt's Windows backend gives every window the icon named IDI_ICON1.
 // SpektraLab.ico is the product icon, as desktop/src-tauri/icons/icon.ico.
 IDI_ICON1 ICON "SpektraLab.ico"
+
+1 VERSIONINFO
+ FILEVERSION SPK_FILE_VERSION
+ PRODUCTVERSION SPK_FILE_VERSION
+ FILEOS 0x40004
+ FILETYPE 1
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "SpektrafilmWinApp film and print editor"
+            VALUE "FileVersion", SPEKTRALAB_VERSION
+            VALUE "OriginalFilename", "SpektrafilmWinApp.exe"
+            VALUE "ProductName", "SpektrafilmWinApp"
+            VALUE "ProductVersion", SPEKTRALAB_VERSION
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

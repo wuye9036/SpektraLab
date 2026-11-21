@@ -44,11 +44,11 @@ try {
     & $cmake @arguments
     if ($LASTEXITCODE -ne 0) { throw "Configuration failed: $LASTEXITCODE" }
     $buildArguments = @('--build', $BuildDirectory, '--parallel', $Jobs)
-    if (-not $RunTests) { $buildArguments += @('--target', 'SpektraLabQt') }
+    if (-not $RunTests) { $buildArguments += @('--target', 'SpektrafilmWinApp') }
     & $cmake @buildArguments
     if ($LASTEXITCODE -ne 0) { throw "Build failed: $LASTEXITCODE" }
     $app = Join-Path $BuildDirectory 'app'
-    & "$qt/bin/windeployqt.exe" --release --compiler-runtime --qmldir "$PSScriptRoot/qml" "$app/SpektraLabQt.exe"
+    & "$qt/bin/windeployqt.exe" --release --compiler-runtime --qmldir "$PSScriptRoot/qml" "$app/SpektrafilmWinApp.exe"
     if ($LASTEXITCODE -ne 0) { throw "Deployment failed: $LASTEXITCODE" }
     # windeployqt intentionally deploys only qwindows; keep the offscreen plugin
     # for the explicit integration-test mode as well.
@@ -78,7 +78,7 @@ try {
     [ordered]@{ qt = '6.11.3'; compiler = 'MinGW-w64 13.1.0 posix-seh';
         source_directory = $SourceDirectory; build_directory = $BuildDirectory;
         utc = [DateTime]::UtcNow.ToString('o'); ctest_run = [bool]$RunTests;
-        executable_sha256 = (Get-FileHash -LiteralPath "$app/SpektraLabQt.exe" -Algorithm SHA256).Hash.ToLowerInvariant() } |
+        executable_sha256 = (Get-FileHash -LiteralPath "$app/SpektrafilmWinApp.exe" -Algorithm SHA256).Hash.ToLowerInvariant() } |
         ConvertTo-Json | Set-Content -LiteralPath "$BuildDirectory/qt-build.json" -Encoding UTF8
-    Write-Output "Ready: $app/SpektraLabQt.exe"
+    Write-Output "Ready: $app/SpektrafilmWinApp.exe"
 } finally { $env:PATH = $savedPath }

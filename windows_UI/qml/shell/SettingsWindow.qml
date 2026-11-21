@@ -216,10 +216,9 @@ ShellWindow {
                     LinkText {
                         Layout.topMargin: 4
                         text: L10n.tr("settings.checkUpdates")
-                        available: false
-                        reason: L10n.tr("settings.checkUpdatesReason")
+                        toolTip: L10n.tr("settings.checkUpdatesReason")
+                        onClicked: Qt.openUrlExternally(AppInfo.sourceUrl + "/releases")
                     }
-                    Note { text: L10n.tr("settings.checkUpdatesReason") }
                 }
             }
 

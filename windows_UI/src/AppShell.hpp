@@ -99,7 +99,7 @@ public:
     QString engineBuild() const;
     QString qtVersion() const;
     QString compiler() const;
-    QString sourceUrl() const {return QStringLiteral("https://github.com/JamesQiu2005/SpektraLab");}
+    QString sourceUrl() const {return QStringLiteral("https://github.com/wuye9036/SpektraLab");}
     QString upstreamUrl() const {return QStringLiteral("https://github.com/andreavolpato/spektrafilm");}
     QString licencesDirectory() const;
     QString settingsFile() const {return startup_.settingsFile;}

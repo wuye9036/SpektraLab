@@ -1184,7 +1184,8 @@ int main(int argc,char** argv) {
         std::fwrite(bytes.data(),1,std::size_t(bytes.size()),stderr);std::fputc('\n',stderr);std::fflush(stderr);
     });
     // Before the application object, so AppLocalDataLocation is known to the
-    // early read of the preferences below.
+    // early read of the preferences below. Keep these storage identifiers so
+    // existing edits, recipes and preferences survive the product rename.
     QCoreApplication::setOrganizationName("SpektraLab");QCoreApplication::setApplicationName("SpektraLab Windows");
     // Settings > General > Scale (the Mac's InterfaceScale, Theme.swift): Qt
     // scales the whole window by QT_SCALE_FACTOR, which must be set before the
@@ -1199,10 +1200,11 @@ int main(int argc,char** argv) {
     if(!startup.interfaceScaleFromEnvironment&&startup.activeInterfaceScale!=QLatin1String("115"))
         qputenv("QT_SCALE_FACTOR",QByteArray::number(AppInfo::scaleFactor(startup.activeInterfaceScale),'f',4));
     QGuiApplication app(argc,argv);
+    QGuiApplication::setApplicationDisplayName("SpektrafilmWinApp");
     UiFonts uiFonts;
     qmlRegisterSingletonInstance("SpektraLab.Native",1,0,"UiFonts",&uiFonts);
     QQuickStyle::setStyle("Basic");
-    QCommandLineParser parser;parser.setApplicationDescription("SpektraLab Windows Qt Quick preview");parser.addHelpOption();
+    QCommandLineParser parser;parser.setApplicationDescription("SpektrafilmWinApp film and print editor");parser.addHelpOption();
     parser.addOptions({{"resources","Engine resource directory","directory"},
                        {"open","Open a RAW file","file"},
                        {"snapshot","Save one rendered window capture to a new PNG and exit (requires --open)","file"},

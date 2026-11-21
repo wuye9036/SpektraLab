@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Also usable as add_subdirectory(windows_UI) after the engine defines
 # spk_desktop_host. The standalone mode never modifies the engine checkout.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    project(SpektraLabWindowsUI LANGUAGES CXX)
+    project(SpektrafilmWinApp LANGUAGES CXX)
     include(CTest)
     set(SPEKTRALAB_SOURCE_ROOT "" CACHE PATH "Source tree supplying engine/")
     if(NOT EXISTS "${SPEKTRALAB_SOURCE_ROOT}/engine/CMakeLists.txt")
@@ -78,7 +78,7 @@ endif()
 set(spk_qt_export_sources src/ExportRecipe.hpp src/ExportRecipe.cpp src/RecipeExport.hpp src/RecipeExport.cpp
     src/PreviewControllerExport.cpp src/SoftProof.hpp src/SoftProof.cpp src/ProofTransform.hpp)
 
-qt_add_executable(SpektraLabQt WIN32
+qt_add_executable(SpektrafilmWinApp WIN32
     resources/SpektraLab.rc
     src/main.cpp src/Messages.hpp src/PreviewController.hpp src/PreviewController.cpp
     ${spk_qt_export_sources} src/ExportRecipeStore.hpp src/ExportRecipeStore.cpp
@@ -89,23 +89,23 @@ qt_add_executable(SpektraLabQt WIN32
     src/ColorCanvasNode.hpp src/ColorCanvasNode.cpp
     src/ColorPipeline.hpp src/ColorPipeline.cpp
     src/Localizer.hpp src/Localizer.cpp src/UiFonts.hpp src/UiFonts.cpp)
-target_compile_features(SpektraLabQt PRIVATE cxx_std_20)
-target_link_libraries(SpektraLabQt PRIVATE
+target_compile_features(SpektrafilmWinApp PRIVATE cxx_std_20)
+target_link_libraries(SpektrafilmWinApp PRIVATE
     spk_desktop_host spk_qt_host_output Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Qml Qt6::Quick Qt6::QuickControls2)
-spk_qt_add_canvas_shaders(SpektraLabQt)
+spk_qt_add_canvas_shaders(SpektrafilmWinApp)
 # The colour core behind ColorPipeline: display-profile discovery and the LUT.
-target_sources(SpektraLabQt PRIVATE
+target_sources(SpektrafilmWinApp PRIVATE
     src/DisplayColor.hpp src/DisplayColor.cpp src/ColorLut.hpp src/ColorLut.cpp)
 # The compiled-in language tables, read from :/i18n (i18n/README.md).
 set(spektralab_languages i18n/en.json i18n/zh-Hans.json i18n/ja.json i18n/es.json)
-qt_add_resources(SpektraLabQt "spektralab_i18n" PREFIX "/i18n" BASE i18n FILES ${spektralab_languages})
+qt_add_resources(SpektrafilmWinApp "spektralab_i18n" PREFIX "/i18n" BASE i18n FILES ${spektralab_languages})
 set_source_files_properties(qml/Theme.qml qml/L10n.qml qml/Icons.qml qml/SectionStates.qml qml/Catalog.qml
     PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 # One module; the subdirectories are ownership, not namespaces -- every type is
 # visible to every file by its bare name. Main.qml is the window, EditorState
 # the state the panes share, L10n the text lookup; Theme, Icons and the
 # controls in qml/controls are the design system ported from the macOS app.
-qt_add_qml_module(SpektraLabQt URI SpektraLab VERSION 1.0
+qt_add_qml_module(SpektrafilmWinApp URI SpektraLab VERSION 1.0
     QML_FILES
         qml/Main.qml qml/EditorState.qml qml/L10n.qml
         qml/Theme.qml qml/Icons.qml qml/SectionStates.qml qml/Catalog.qml
@@ -129,39 +129,39 @@ qt_add_qml_module(SpektraLabQt URI SpektraLab VERSION 1.0
         qml/right/StatusSection.qml
         qml/export/ExportPage.qml qml/export/ExportField.qml qml/export/TokenChip.qml
     NO_CACHEGEN)
-set_target_properties(SpektraLabQt PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/app")
+set_target_properties(SpektrafilmWinApp PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/app")
 
 # The one resource directory is explicitly adjacent to the executable. No
 # lookup through another checkout and no Python in the application.
 add_custom_target(spektralab_qt_resources ALL
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui-fonts" "$<TARGET_FILE_DIR:SpektraLabQt>/resources/ui-fonts"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui-fonts" "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources/ui-fonts"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
-        "$<TARGET_FILE_DIR:spk_raw_render>/resources" "$<TARGET_FILE_DIR:SpektraLabQt>/resources"
+        "$<TARGET_FILE_DIR:spk_raw_render>/resources" "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
-        "$<TARGET_FILE_DIR:spk_raw_render>/licenses" "$<TARGET_FILE_DIR:SpektraLabQt>/licenses"
+        "$<TARGET_FILE_DIR:spk_raw_render>/licenses" "$<TARGET_FILE_DIR:SpektrafilmWinApp>/licenses"
     # The Digital Intermediate's two view LUTs, the macOS bundle's own files
     # (Resources/DI), copied beside every DI export.
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/../modern_UI/Spektrafilm/Spektrafilm/Resources/DI"
-        "$<TARGET_FILE_DIR:SpektraLabQt>/resources/di"
+        "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources/di"
     VERBATIM)
 add_dependencies(spektralab_qt_resources spektralab_vulkan_resources)
-add_dependencies(SpektraLabQt spektralab_qt_resources)
+add_dependencies(SpektrafilmWinApp spektralab_qt_resources)
 
 # The Pre-Dev rail's backend: PreviewController's white balance, Process,
 # Latitude, Scene Placement and Tone Mask (PreviewControllerPredev.cpp).
 # Every target that compiles PreviewController.cpp compiles these with it.
 set(spektralab_predev_sources src/PreviewControllerPredev.cpp src/LensProfile.cpp
     src/LatitudeModel.hpp src/LatitudeModel.cpp src/WhiteBalance.hpp src/WhiteBalance.cpp)
-target_sources(SpektraLabQt PRIVATE ${spektralab_predev_sources})
+target_sources(SpektrafilmWinApp PRIVATE ${spektralab_predev_sources})
 
 if(BUILD_TESTING)
     qt_add_executable(spk_qt_frame_output_test tests/frame_output.cpp src/FrameOutput.cpp src/FrameImage.cpp)
     target_include_directories(spk_qt_frame_output_test PRIVATE src)
     target_compile_features(spk_qt_frame_output_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_frame_output_test PRIVATE spk_desktop_host Qt6::Core Qt6::Gui)
-    add_test(NAME spk_qt_frame_output COMMAND spk_qt_frame_output_test "$<TARGET_FILE_DIR:SpektraLabQt>/resources")
+    add_test(NAME spk_qt_frame_output COMMAND spk_qt_frame_output_test "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources")
 
     # The export page's model and writer: recipes and the Mac's JSON, naming,
     # existing-file policies, sRGB byte-identity with the old writer, every
@@ -174,7 +174,7 @@ if(BUILD_TESTING)
     target_compile_features(spk_qt_recipe_export_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_recipe_export_test PRIVATE spk_desktop_host spk_qt_host_output Qt6::Core Qt6::Gui)
     add_dependencies(spk_qt_recipe_export_test spektralab_qt_resources)
-    set(spk_recipe_export_args "$<TARGET_FILE_DIR:SpektraLabQt>/resources" "${CMAKE_CURRENT_BINARY_DIR}/recipe-export-test")
+    set(spk_recipe_export_args "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources" "${CMAKE_CURRENT_BINARY_DIR}/recipe-export-test")
     if(SPEKTRALAB_TEST_RAW)
         list(APPEND spk_recipe_export_args "${SPEKTRALAB_TEST_RAW}")
     endif()
@@ -188,7 +188,7 @@ if(BUILD_TESTING)
     target_include_directories(spk_qt_frame_image_test PRIVATE src)
     target_compile_features(spk_qt_frame_image_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_frame_image_test PRIVATE spk_desktop_host Qt6::Core Qt6::Gui)
-    add_test(NAME spk_qt_frame_image COMMAND spk_qt_frame_image_test "$<TARGET_FILE_DIR:SpektraLabQt>/resources")
+    add_test(NAME spk_qt_frame_image COMMAND spk_qt_frame_image_test "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources")
 
     qt_add_executable(spk_qt_library_workflow_test tests/library_workflow.cpp tests/display_checks.hpp
         src/PreviewController.hpp src/PreviewController.cpp src/FrameOutput.cpp src/FrameImage.cpp src/EditStore.cpp
@@ -211,7 +211,7 @@ if(BUILD_TESTING)
     target_compile_features(spk_qt_controller_settings_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_controller_settings_test PRIVATE spk_desktop_host spk_qt_host_output Qt6::Core Qt6::Gui)
     add_test(NAME spk_qt_controller_settings COMMAND spk_qt_controller_settings_test
-        "$<TARGET_FILE_DIR:SpektraLabQt>/resources" "${CMAKE_CURRENT_BINARY_DIR}/controller-settings-test")
+        "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources" "${CMAKE_CURRENT_BINARY_DIR}/controller-settings-test")
     # Film Edge and Date Back: rows, product rows, the controller's macOS
     # rules, the edit store's round trip and Sync. The catalogue but no RAW;
     # a fresh scratch directory per run.
@@ -222,13 +222,13 @@ if(BUILD_TESTING)
     target_compile_features(spk_qt_film_edge_state_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_film_edge_state_test PRIVATE spk_desktop_host spk_qt_host_output Qt6::Core Qt6::Gui)
     add_test(NAME spk_qt_film_edge_state COMMAND spk_qt_film_edge_state_test
-        "$<TARGET_FILE_DIR:SpektraLabQt>/resources" "${CMAKE_CURRENT_BINARY_DIR}/film-edge-state-test")
+        "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources" "${CMAKE_CURRENT_BINARY_DIR}/film-edge-state-test")
     # The settings table through the real engine on a synthetic frame: the
     # macOS defaults are accepted, deltas stay minimal across stock changes,
     # and the filter scale is inert at zero shifts. No RAW fixture.
     if(TARGET spk_desktop_preview_test)
         add_test(NAME spk_desktop_settings_engine COMMAND spk_desktop_preview_test --settings-engine
-            "$<TARGET_FILE_DIR:SpektraLabQt>/resources")
+            "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources")
     endif()
     # The canvas tools without a window or a RAW: the zoom ladder and the
     # physical-pixel alignment of 100 %, the crop grips, the histogram on
@@ -257,8 +257,8 @@ if(BUILD_TESTING)
         Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Quick)
     add_dependencies(spk_qt_color_canvas_test spektralab_qt_resources)
     spk_qt_add_canvas_shaders(spk_qt_color_canvas_test)
-    add_test(NAME spk_qt_color_canvas COMMAND spk_qt_color_canvas_test "$<TARGET_FILE_DIR:SpektraLabQt>/resources")
-    add_test(NAME spk_qt_color_canvas_software COMMAND spk_qt_color_canvas_test --software "$<TARGET_FILE_DIR:SpektraLabQt>/resources")
+    add_test(NAME spk_qt_color_canvas COMMAND spk_qt_color_canvas_test "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources")
+    add_test(NAME spk_qt_color_canvas_software COMMAND spk_qt_color_canvas_test --software "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources")
     set_tests_properties(spk_qt_color_canvas PROPERTIES SKIP_RETURN_CODE 77)
     # The shipped tables and the QML keys, plus a scratch directory inside the
     # build tree for the test's own language files.
@@ -327,7 +327,7 @@ if(BUILD_TESTING)
     target_link_libraries(spk_qt_soft_proof_test PRIVATE spk_desktop_host spk_qt_host_output
         Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Quick)
     add_dependencies(spk_qt_soft_proof_test spektralab_qt_resources)
-    add_test(NAME spk_qt_soft_proof COMMAND spk_qt_soft_proof_test "$<TARGET_FILE_DIR:SpektraLabQt>/resources")
+    add_test(NAME spk_qt_soft_proof COMMAND spk_qt_soft_proof_test "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources")
     if(WIN32)
         set_tests_properties(spk_qt_soft_proof PROPERTIES ENVIRONMENT_MODIFICATION "${qt_test_runtime_path}")
     endif()
@@ -347,7 +347,7 @@ if(BUILD_TESTING)
     target_compile_features(spk_qt_predev_test PRIVATE cxx_std_20)
     target_link_libraries(spk_qt_predev_test PRIVATE spk_desktop_host spk_qt_host_output Qt6::Core Qt6::Gui)
     add_test(NAME spk_qt_predev COMMAND spk_qt_predev_test
-        "$<TARGET_FILE_DIR:SpektraLabQt>/resources" "${CMAKE_CURRENT_BINARY_DIR}/predev-test")
+        "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources" "${CMAKE_CURRENT_BINARY_DIR}/predev-test")
     if(WIN32)
         set_tests_properties(spk_qt_predev PROPERTIES ENVIRONMENT_MODIFICATION "${qt_test_runtime_path}")
     endif()
@@ -391,8 +391,8 @@ endif()
 set(spektralab_postdev_core_sources src/PostDev.hpp src/PostDevView.hpp src/PostDevView.cpp)
 set(spektralab_postdev_controller_sources ${spektralab_postdev_core_sources}
     src/PostDevSurfaces.hpp src/PostDevSurfaces.cpp src/PreviewControllerPostDev.cpp)
-target_sources(SpektraLabQt PRIVATE ${spektralab_postdev_controller_sources})
-qt_target_qml_sources(SpektraLabQt
+target_sources(SpektrafilmWinApp PRIVATE ${spektralab_postdev_controller_sources})
+qt_target_qml_sources(SpektrafilmWinApp
     QML_FILES
         qml/controls/PostDevSlider.qml qml/controls/CurveEditor.qml qml/controls/ZoneWheel.qml
         qml/controls/ColorBalanceEditor.qml
@@ -418,8 +418,8 @@ endif()
 # under the Navigator, the holes on the canvas). Every target that compiles
 # PreviewController.cpp compiles these with it.
 set(spektralab_pair_sources src/HalfFramePair.hpp src/HalfFramePair.cpp src/PreviewControllerPairs.cpp)
-target_sources(SpektraLabQt PRIVATE ${spektralab_pair_sources})
-qt_target_qml_sources(SpektraLabQt
+target_sources(SpektrafilmWinApp PRIVATE ${spektralab_pair_sources})
+qt_target_qml_sources(SpektrafilmWinApp
     QML_FILES qml/left/PairSection.qml qml/centre/PairOverlay.qml qml/centre/PairFramePicker.qml
     NO_CACHEGEN)
 if(BUILD_TESTING)
@@ -453,14 +453,16 @@ endif()
 
 # --- The application shell (lane ui-app-shell) ---
 # The Settings and About windows, the application menu and the preferences
-# file (src/AppSettings.*, src/AppShell.*, qml/shell/). The version is the
-# macOS app's MARKETING_VERSION (modern_UI/Spektrafilm/Spektrafilm.xcodeproj/
-# project.pbxproj:1334), so both builds of one release say the same number.
+# file (src/AppSettings.*, src/AppShell.*, qml/shell/). About and the Windows
+# packages share this version.
 set(SPEKTRALAB_VERSION "1.3.3")
-target_sources(SpektraLabQt PRIVATE src/AppSettings.hpp src/AppSettings.cpp src/AppShell.hpp src/AppShell.cpp
+string(REPLACE "." "," spk_resource_version "${SPEKTRALAB_VERSION}")
+set_source_files_properties(resources/SpektraLab.rc PROPERTIES
+    COMPILE_DEFINITIONS "SPK_FILE_VERSION=${spk_resource_version},0")
+target_sources(SpektrafilmWinApp PRIVATE src/AppSettings.hpp src/AppSettings.cpp src/AppShell.hpp src/AppShell.cpp
     src/ShellCapture.hpp src/ShellCapture.cpp)
-target_compile_definitions(SpektraLabQt PRIVATE SPEKTRALAB_VERSION="${SPEKTRALAB_VERSION}")
-qt_target_qml_sources(SpektraLabQt
+target_compile_definitions(SpektrafilmWinApp PRIVATE SPEKTRALAB_VERSION="${SPEKTRALAB_VERSION}")
+qt_target_qml_sources(SpektrafilmWinApp
     QML_FILES
         qml/shell/ShellWindow.qml qml/shell/SettingsWindow.qml qml/shell/SettingsGroup.qml
         qml/shell/SettingsReadout.qml qml/shell/AboutWindow.qml qml/shell/LicenceWindow.qml
@@ -472,8 +474,8 @@ qt_target_qml_sources(SpektraLabQt
 set(spk_volk_license "${CMAKE_CURRENT_SOURCE_DIR}/../engine/third_party/volk/LICENSE.md")
 if(EXISTS "${spk_volk_license}")
     add_custom_command(TARGET spektralab_qt_resources POST_BUILD
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:SpektraLabQt>/licenses"
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${spk_volk_license}" "$<TARGET_FILE_DIR:SpektraLabQt>/licenses/volk-LICENSE.md"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:SpektrafilmWinApp>/licenses"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${spk_volk_license}" "$<TARGET_FILE_DIR:SpektrafilmWinApp>/licenses/volk-LICENSE.md"
         VERBATIM)
 endif()
 if(BUILD_TESTING)
@@ -486,7 +488,7 @@ if(BUILD_TESTING)
     # The Settings and About windows load, every page and a licence text are
     # captured, and no QML warning is logged (ShellCapture.hpp): the real
     # executable, offscreen, with its preferences inside the build tree.
-    add_test(NAME spk_qt_shell_smoke COMMAND "${CMAKE_COMMAND}" "-DAPP=$<TARGET_FILE:SpektraLabQt>"
+    add_test(NAME spk_qt_shell_smoke COMMAND "${CMAKE_COMMAND}" "-DAPP=$<TARGET_FILE:SpektrafilmWinApp>"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/shell-smoke" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/shell_smoke.cmake")
     set_tests_properties(spk_qt_shell_smoke PROPERTIES TIMEOUT 180
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QML_DISABLE_DISK_CACHE=1;QSG_RHI_DISABLE_DISK_CACHE=1")
@@ -503,7 +505,7 @@ endif()
 # PreviewController.cpp compiles these with it.
 set(spektralab_library_core_sources src/Library.hpp src/Library.cpp src/SettingsClipboard.hpp src/SettingsClipboard.cpp)
 set(spektralab_library_sources ${spektralab_library_core_sources} src/PreviewControllerLibrary.cpp)
-target_sources(SpektraLabQt PRIVATE ${spektralab_library_sources})
+target_sources(SpektrafilmWinApp PRIVATE ${spektralab_library_sources})
 if(BUILD_TESTING)
     foreach(target spk_qt_library_workflow_test spk_qt_controller_settings_test spk_qt_editing_workflow_test
                    spk_qt_export_workflow_test spk_qt_film_edge_state_test spk_qt_predev_test spk_qt_pairs_workflow_test)
@@ -523,7 +525,7 @@ if(BUILD_TESTING)
     target_link_libraries(spk_qt_library_test PRIVATE spk_desktop_host spk_qt_host_output Qt6::Core Qt6::Gui)
     add_dependencies(spk_qt_library_test spektralab_qt_resources)
     add_test(NAME spk_qt_library COMMAND spk_qt_library_test
-        "$<TARGET_FILE_DIR:SpektraLabQt>/resources" "${CMAKE_CURRENT_BINARY_DIR}/library-test")
+        "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources" "${CMAKE_CURRENT_BINARY_DIR}/library-test")
     set_tests_properties(spk_qt_library PROPERTIES TIMEOUT 600)
     if(WIN32)
         set_tests_properties(spk_qt_library PROPERTIES ENVIRONMENT_MODIFICATION "${qt_test_runtime_path}")
@@ -548,7 +550,7 @@ if(BUILD_TESTING)
     target_link_libraries(spk_qt_flat_input_test PRIVATE spk_desktop_host)
     add_dependencies(spk_qt_flat_input_test spektralab_qt_resources)
     add_test(NAME spk_qt_flat_input COMMAND spk_qt_flat_input_test
-        "$<TARGET_FILE_DIR:SpektraLabQt>/resources" "${CMAKE_CURRENT_BINARY_DIR}/flat-input-test")
+        "$<TARGET_FILE_DIR:SpektrafilmWinApp>/resources" "${CMAKE_CURRENT_BINARY_DIR}/flat-input-test")
 endif()
 
 # Share the Post-Dev implementation between the editor and the standalone

@@ -2,10 +2,10 @@
 
 This file is copied into the application's `licenses/` folder, which the About
 window lists; "this folder" below means that folder. Paths starting with
-`resources/` are beside `SpektraLabQt.exe`. The source tree's copy is
+`resources/` are beside `SpektrafilmWinApp.exe`. The source tree's copy is
 `windows_UI/THIRD_PARTY.md`.
 
-SpektraLab's code is GPL-3.0-or-later (`LICENSE`). The Windows build is
+SpektrafilmWinApp and its SpektraLab-derived engine are licensed under GPL-3.0-or-later (`LICENSE`). The Windows build is
 dynamically linked against the open-source Qt 6.11.3 (`msvc2022_64`); it does
 not use a Qt commercial licence.
 
@@ -17,7 +17,7 @@ under the SIL Open Font License 1.1. The font and its copyright and licence text
 
 | Component | What and where | Licence | Notice in this folder |
 |---|---|---|---|
-| SpektraLab | `SpektraLabQt.exe`, the engine compiled into it, `resources/vulkan/*.spv` | GPL-3.0-or-later | `LICENSE` |
+| SpektrafilmWinApp | `SpektrafilmWinApp.exe`, the engine compiled into it, `resources/vulkan/*.spv` | GPL-3.0-or-later | `LICENSE` |
 | spektrafilm profiles and print LUTs | `resources/profiles/` (the 28 spektrafilm profiles), `resources/print_luts.json`, `resources/spektrafilm_constants.bin`, `resources/neutral_print_filters.json`; by Andrea Volpato, <https://github.com/andreavolpato/spektrafilm> | CC BY-SA 4.0 | `SPEKTRAFILM_LICENSE.txt` |
 | Black-and-white product profiles | Tri-X 400, T-Max 100, Neopan 100 Acros II, HP5 Plus 400 and Multigrade IV RC in `resources/profiles/`; SpektraLab's own data (Hanze Qiu), not spektrafilm's | no separate licence is stated; they ship with SpektraLab | `PRODUCT_PROFILES_NOTICE.md` (also `resources/PRODUCT_PROFILES_NOTICE.md`): what each is built from and whose trademarks the names are |
 | Digital Intermediate view LUTs | `resources/di/*.cube`, the macOS bundle's own files, copied beside each DI export | SpektraLab's, GPL-3.0-or-later | `LICENSE` |
@@ -41,7 +41,7 @@ already beside the executable).
 | Vulkan-Headers, tag `vulkan-sdk-1.4.341.0` (<https://github.com/KhronosGroup/Vulkan-Headers>) | headers only, compiled against | Apache-2.0 / MIT |
 | glslang 16.6.0 (<https://github.com/KhronosGroup/glslang>) | compiles the GLSL kernels to the shipped SPIR-V | BSD-3-Clause and others, per its `LICENSE.txt` |
 | Visual Studio 2022 (MSVC, CMake, Ninja) | the compiler and build tools | Microsoft's licence; CMake BSD-3-Clause; Ninja Apache-2.0 |
-| Inno Setup 6.7.3 (<https://jrsoftware.org/isinfo.php>) | `-Installer` only: compiles `installer/SpektraLab.iss`; its setup and uninstaller runtime is inside the `-Setup.exe`, not in the application folder | Inno Setup License (free, commercial use included) |
+| Inno Setup 6.7.3 (<https://jrsoftware.org/isinfo.php>) | `-Installer` only: compiles `installer/SpektrafilmWinApp.iss`; its setup and uninstaller runtime is inside the `-Setup.exe`, not in the application folder | Inno Setup License (free, commercial use included) |
 
 The older MinGW build (`build.ps1`) also deploys the MinGW-w64 runtime and
 copies its licences to `MinGW/` (source:
