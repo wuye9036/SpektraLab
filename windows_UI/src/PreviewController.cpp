@@ -765,13 +765,10 @@ QVariantMap PreviewController::metadata() const {
     // A TIFF, JPEG or PNG was decoded at the door (raw_white_balance.hpp):
     // `input` says what it was read as ("TIFF, Adobe RGB (1998)").
     const bool raw=pairActive()||library::rawFile(QString::fromStdWString(frame_->source.wstring()));
-    // The picture's size at full resolution, also while a live frame is shown.
-    const double k=frameScale();
-    QSize shown=image_.size();
-#ifdef Q_OS_WIN
-    if (frame_->display && image_.cacheKey()==full_image_.cacheKey()) shown=QSize(int(frame_->width()),int(frame_->height()));
-#endif
-    return {{"width",int(std::lround(shown.width()*k))},{"height",int(std::lround(shown.height()*k))},{"fullResolution",fullResolution()},
+    // The native surface owns the cropped, oriented canvas dimensions. Its
+    // companion QImage can hold just the navigator, even at the full tier.
+    const QSize shown=native_visible_ ? native_visible_->logicalSize : image_.deviceIndependentSize().toSize();
+    return {{"width",shown.width()},{"height",shown.height()},{"fullResolution",fullResolution()},
         {"sourceWidth",source.width()},{"sourceHeight",source.height()},
         {"camera",text(frame_->metadata.make+" "+frame_->metadata.model).trimmed()},
         {"raw",raw},{"input",raw?QString():text(frame_->metadata.decoder_name)},

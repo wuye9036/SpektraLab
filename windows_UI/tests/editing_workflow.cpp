@@ -3,6 +3,7 @@
 #include "PreviewController.hpp"
 #include "EditStore.hpp"
 #include "FrameOutput.hpp"
+#include "NativeCanvasFrame.hpp"
 #include "PostDevSurfaces.hpp"
 #include "RecipeExport.hpp"
 #include "display_checks.hpp"
@@ -17,6 +18,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTimer>
+#include <QTemporaryDir>
 #include <QTransform>
 #include <algorithm>
 #include <cmath>
@@ -65,6 +67,37 @@ void idle(PreviewController& c,const QString& name,bool allowFailure=false) {
 output::Geometry geometry(const PreviewController& c) {
     return {c.cropRect(),c.quarterTurns(),c.flipHorizontal(),c.flipVertical(),c.straightenDegrees()};
 }
+// A projected GPU print carries both a navigator and a full-size canvas surface.
+void nativePictureSize(const std::filesystem::path& resources, const QString& photo, const QString& edits) {
+    PreviewController c(resources,nullptr,{},edits,{},1600,true);
+    ready(c);
+    c.openFiles({QUrl::fromLocalFile(photo)});
+    waitFor([&]{return c.hasFrame() && !c.fullResolution();},"native preview frame");
+    auto checkSize=[&](QSize expected){
+        settled(c);
+        const auto native=c.nativePreview().value<NativeCanvasFrameRef>().lock();
+        check(native && (native->texture || native->restoreTexture) && native->logicalSize==expected,
+              "Native surface has the expected logical dimensions");
+        const auto meta=c.metadata();
+        const QSize reported(meta["width"].toInt(),meta["height"].toInt());
+        check(reported==expected,QString("Reported %1x%2, expected %3x%4")
+              .arg(reported.width()).arg(reported.height()).arg(expected.width()).arg(expected.height()));
+    };
+    checkSize(QSize(int(c.frame()->logicalWidth()),int(c.frame()->logicalHeight())));
+    waitFor([&]{return !c.busy() && c.fullResolution();},"full native frame");
+    const QSize whole(int(c.frame()->decode_width),int(c.frame()->decode_height));
+    checkSize(whole);
+    c.setStraightenDegrees(0.2);
+    checkSize(whole);
+    const QRectF crop(.1,.1,.75,.5);
+    c.setCropRect(crop);
+    const QSize cropped=output::cropPixels(whole,c.cropRect()).size();
+    checkSize(cropped);
+    c.rotateClockwise();
+    checkSize(cropped.transposed());
+    c.resetGeometry();
+    checkSize(whole);
+}
 struct Desired {
     int film=0,paper=0,decode=0;
     double exposure=0;
@@ -105,6 +138,15 @@ int main(int argc,char** argv) {
     QString destination;QElapsedTimer elapsed;elapsed.start();QJsonObject report;
     try {
         const auto args=application.arguments();
+        if(args.size()==5 && args[1]=="--native-size") {
+            QTemporaryDir scratch(QDir(args[4]).filePath("native-size-XXXXXX"));
+            check(scratch.isValid(),"Create a private native-size fixture directory");
+            const QString photo=scratch.filePath(QFileInfo(args[3]).fileName());
+            check(QFile::copy(args[3],photo),"Copy native-size fixture");
+            nativePictureSize(nativePath(args[2]),photo,scratch.filePath("edits"));
+            std::cout<<"Native picture dimensions passed\n";
+            return 0;
+        }
         if(args.size()!=5)throw std::runtime_error("usage: spk_editing_workflow_test <resources> <RAW> <rejected-RAW> <new-output-directory>");
         const auto resources=nativePath(args[1]);const QFileInfo original(args[2]),rejected(args[3]);
         destination=QFileInfo(args[4]).absoluteFilePath();
