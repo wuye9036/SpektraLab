@@ -1,0 +1,45 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "display_half.glsl"
+layout(local_size_x=16, local_size_y=16) in;
+layout(set=0,binding=0,std430) readonly buffer Codes { uint words[]; };
+layout(set=0,binding=1,std430) readonly buffer Geometry {
+    uint stride, left, top, width, height, turns, flips;
+    float cosHi, cosLo, sinHi, sinLo;
+} g;
+layout(set=0,binding=2,rgba16f) uniform writeonly image2D frame;
+
+vec3 codes(ivec2 p) {
+    uint i=2u*((uint(p.y)+g.top)*g.stride+uint(p.x)+g.left);
+    return vec3(words[i]&65535u, words[i]>>16u, words[i+1u]&65535u);
+}
+
+void main() {
+    ivec2 outPixel=ivec2(gl_GlobalInvocationID.xy), size=imageSize(frame);
+    if (any(greaterThanEqual(outPixel,size))) return;
+    ivec2 p=outPixel, last=ivec2(g.width,g.height)-1;
+    if ((g.flips&1u)!=0u) p.x=size.x-1-p.x;
+    if ((g.flips&2u)!=0u) p.y=size.y-1-p.y;
+    if (g.turns==1u) p=ivec2(p.y,last.y-p.x);
+    else if (g.turns==2u) p=last-p;
+    else if (g.turns==3u) p=ivec2(last.x-p.y,p.x);
+    vec3 code;
+    if (g.sinHi==0.0 && g.sinLo==0.0) code=codes(p);
+    else {
+        ivec2 delta=2*p-last;
+        ivec2 trig=ivec2(vec2(g.cosHi,g.sinHi)*4096.);
+        ivec2 fixedPoint=last*4096 + ivec2(delta.x*trig.x+delta.y*trig.y,
+                                            delta.y*trig.x-delta.x*trig.y);
+        ivec2 base=fixedPoint>>13;
+        precise vec2 fraction=vec2(fixedPoint&8191)/8192.0
+            + 0.5*vec2(delta.x*g.cosLo+delta.y*g.sinLo,delta.y*g.cosLo-delta.x*g.sinLo);
+        ivec2 adjust=ivec2(floor(fraction));
+        base+=adjust;
+        fraction-=vec2(adjust);
+        ivec2 lo=clamp(base,ivec2(0),last), hi=clamp(base+1,ivec2(0),last);
+        precise vec3 top=mix(codes(lo),codes(ivec2(hi.x,lo.y)),fraction.x);
+        precise vec3 bottom=mix(codes(ivec2(lo.x,hi.y)),codes(hi),fraction.x);
+        code=floor(mix(top,bottom,fraction.y)+0.5);
+    }
+    imageStore(frame,outPixel,displayHalf(code));
+}

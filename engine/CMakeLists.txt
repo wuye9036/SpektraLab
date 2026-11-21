@@ -122,7 +122,7 @@ if(NOT APPLE)
             spk_lincomb3 spk_log10_guarded spk_curves
             spk_couplers_correction spk_spectral_epilogue
             spk_print_exposure spk_cam16ucs_compress
-            spk_cctf_encode_matrix spk_to_rgba16 spk_display_texture
+            spk_cctf_encode_matrix spk_to_rgba16 spk_display_texture spk_display_geometry
             spk_grain_layers spk_grain_layer_one spk_grain_simple
             spk_lognormal_field spk_rng_probe spk_mul spk_glare_add
             spk_reduce_max spk_boost spk_bw_correct spk_edr spk_cctf_decode

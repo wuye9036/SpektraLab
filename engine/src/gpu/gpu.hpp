@@ -50,6 +50,7 @@ namespace spk::gpu {
 // `contents()` is a pointer into the same pages the GPU reads -- no staging,
 // no copy.
 struct Buffer;
+struct DisplayGeometry;
 
 class Gpu;
 
@@ -403,7 +404,7 @@ public:
     // Import a fresh shared texture matching this adapter, fill it, then
     // release key 1 to its D3D11 owner. The consumer owns the NT handle.
     virtual bool write_d3d11_display(Buffer*, uint32_t, uint32_t, void*,
-                                     const void*, BufferRef*, std::string&) { return false; }
+                                     const void*, BufferRef*, const DisplayGeometry*, std::string&) { return false; }
 #endif
     // `spk_result_free` gets a result, not an engine, and a texture handed out
     // +1 must be releasable without one.

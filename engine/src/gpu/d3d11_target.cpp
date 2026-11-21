@@ -41,7 +41,8 @@ std::shared_ptr<ID3D11Texture2D> SharedDisplay::open(ID3D11Device* device) {
 }
 
 DisplayTexture make_d3d11_display(Gpu& gpu, Buffer* rgb, uint32_t width, uint32_t height,
-                                   const D3D11Publication& publication, BufferRef* exact, std::string& error) {
+                                   const D3D11Publication& publication, BufferRef* exact, std::string& error,
+                                   const DisplayGeometry* geometry) {
     auto* device = publication.producer;
     if (!device || !width || !height || width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
         height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) {
@@ -85,8 +86,12 @@ DisplayTexture make_d3d11_display(Gpu& gpu, Buffer* rgb, uint32_t width, uint32_
         !check(tex.As(&mutex), "query shared mutex") ||
         !check(resource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
                                             nullptr, &storage->handle), "create shared NT handle") ||
-        !gpu.write_d3d11_display(rgb, width, height, storage->handle, &desc.AdapterLuid, exact, error)) return nullptr;
+        !gpu.write_d3d11_display(rgb, width, height, storage->handle, &desc.AdapterLuid, exact, geometry, error)) return nullptr;
     if (publication.analyze) {
+        // A concurrent staging Map and AcquireSync on this same device can
+        // wedge the driver before the keyed-mutex timeout even takes effect.
+        std::unique_lock<std::recursive_mutex> contextLock;
+        if (publication.producerMutex) contextLock=std::unique_lock(*publication.producerMutex);
         if (!check(mutex->AcquireSync(1,2000),"acquire analysis texture")) return {};
         try { publication.analyze(tex.Get()); }
         catch (const std::exception& e) { mutex->ReleaseSync(1); error=e.what(); return {}; }

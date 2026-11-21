@@ -151,8 +151,8 @@ void PreviewController::cachePicture() {
     const auto& item=library_[std::size_t(active_index_)];
     if(item.pair)return;
     CachedPicture entry;
-    try {entry.image=desktop::display::downscaled(image_,{previewImageEdge(),previewImageEdge()});}
-    catch(const std::exception&) {return;}
+    entry.image=navigator_;
+    if(entry.image.isNull())return;
     // A live frame's scale belongs to the canvas it was made for.
     if(entry.image.devicePixelRatio()!=1)entry.image.setDevicePixelRatio(1);
     entry.postDev=canvasPostDev();entry.sourceMap=postDevSourceMap();

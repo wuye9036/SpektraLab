@@ -18,6 +18,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "d3d11_target.hpp"
 #define VK_USE_PLATFORM_WIN32_KHR
 #endif
 #include "volk.h"
@@ -79,6 +80,7 @@ constexpr KernelSpec kKernels[] = {
     {"spk_cam16ucs_compress", 7, kWorkgroup},
     {"spk_cctf_encode_matrix", 4, kWorkgroup},
     {"spk_display_texture", 3, 16, true},
+    {"spk_display_geometry", 3, 16, true},
     {"spk_to_rgba16", 3, kWorkgroup},
     {"spk_grain_layers", 8, kWorkgroup},
     {"spk_grain_layer_one", 8, kWorkgroup},
@@ -660,7 +662,7 @@ public:
     }
 
 #ifdef _WIN32
-    bool write_d3d11_display(Buffer*, uint32_t, uint32_t, void*, const void*, BufferRef*, std::string&) override;
+    bool write_d3d11_display(Buffer*, uint32_t, uint32_t, void*, const void*, BufferRef*, const DisplayGeometry*, std::string&) override;
 #endif
     bool flush(std::string&) override { return true; }  // dispatch is synchronous for this milestone
     void* texture(Buffer* buffer, uint32_t width, uint32_t height,
@@ -1123,10 +1125,13 @@ private:
 
 #ifdef _WIN32
 bool VulkanGpu::write_d3d11_display(Buffer* rgb, uint32_t width, uint32_t height, void* handle,
-                                    const void* luid, BufferRef* retained, std::string& error) {
+                                    const void* luid, BufferRef* retained, const DisplayGeometry* geometry, std::string& error) {
     constexpr auto type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+    // Pooled RGB planes may be larger than this frame, particularly when a
+    // live preview follows a full render. Bind only the pixels the shader reads.
+    const uint64_t sourceBytes = geometry && rgb ? rgb->bytes : uint64_t(width) * height * 12;
     if (!win32_memory_properties_ || !rgb || !handle || !width || !height ||
-        uint64_t(width) * height * 12 != rgb->bytes || rgb->bytes > storage_range_limit_) {
+        sourceBytes > rgb->bytes || sourceBytes > storage_range_limit_) {
         error = "no compatible Vulkan display output"; return false;
     }
     VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
@@ -1151,11 +1156,37 @@ bool VulkanGpu::write_d3d11_display(Buffer* rgb, uint32_t width, uint32_t height
     }
 
     const size_t code_bytes = retained ? size_t(width)*height*8 : sizeof(uint32_t);
-    auto exact = alloc_persistent(code_bytes, error);
-    if (!exact) return false;
-    // Emit codes at GPU bandwidth. A single contiguous transfer can then put
-    // the retained pixels in host RAM without slowing every shader workgroup.
-    auto saved = retained ? host_plane(code_bytes) : BufferRef{};
+    BufferRef parameters, exact, saved;
+    if (geometry) {
+        const auto& g = *geometry;
+        if (!g.width || !g.height || !g.stride || g.turns > 3 || g.flips > 3 ||
+            !std::isfinite(g.degrees) || std::abs(g.degrees) > 45 || uint64_t(g.left) + g.width > g.stride ||
+            uint64_t(g.top) + g.height > rgb->bytes / (8ull*g.stride)) {
+            error = "display crop outside retained print"; return false;
+        }
+        const double angle = g.degrees * std::acos(-1.) / 180.;
+        const double c = std::cos(angle), s = std::sin(angle);
+        const double zoom = std::max(std::abs(c)+std::abs(s)*g.height/g.width,
+                                     std::abs(c)+std::abs(s)*g.width/g.height);
+        // Split each matrix coefficient at 12 fraction bits. The shader keeps
+        // its integer and fractional pixel terms separate on long axes.
+        struct Transform {
+            uint32_t stride, left, top, width, height, turns, flips;
+            float cosHi, cosLo, sinHi, sinLo;
+        } transform{g.stride,g.left,g.top,g.width,g.height,g.turns,g.flips};
+        auto split = [](double value, float& hi, float& lo) {
+            hi = float(std::round(value*4096.)/4096.);
+            lo = float(value-hi);
+        };
+        split(c/zoom,transform.cosHi,transform.cosLo);
+        split(s/zoom,transform.sinHi,transform.sinLo);
+        parameters = upload_persistent(&transform,sizeof(transform),error);
+        if (!parameters) return false;
+    } else {
+        exact = alloc_persistent(code_bytes, error);
+        if (!exact) return false;
+        saved = retained ? host_plane(code_bytes) : BufferRef{};
+    }
     std::lock_guard lock(dispatch_mutex_);
     struct Imported {
         VkDevice device;
@@ -1213,7 +1244,7 @@ bool VulkanGpu::write_d3d11_display(Buffer* rgb, uint32_t width, uint32_t height
     vi.format = ci.format;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     if (!checked(vkCreateImageView(device_, &vi, nullptr, &target.view), "create display image view")) return false;
-    auto* pipeline = get_pipeline(*find_kernel("spk_display_texture"), error);
+    auto* pipeline = get_pipeline(*find_kernel(geometry ? "spk_display_geometry" : "spk_display_texture"), error);
     if (!pipeline) return false;
     VkDescriptorPoolSize sizes[]{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -1227,8 +1258,9 @@ bool VulkanGpu::write_d3d11_display(Buffer* rgb, uint32_t width, uint32_t height
     sets.pSetLayouts = &pipeline->descriptors;
     VkDescriptorSet set{};
     if (!checked(vkAllocateDescriptorSets(device_, &sets, &set), "allocate display descriptors")) return false;
-    VkDescriptorBufferInfo source{rgb->handle, 0, rgb->bytes};
-    VkDescriptorBufferInfo codes{exact.get()->handle, 0, exact.get()->bytes};
+    VkDescriptorBufferInfo source{rgb->handle, 0, sourceBytes};
+    auto* second = geometry ? parameters.get() : exact.get();
+    VkDescriptorBufferInfo codes{second->handle, 0, second->bytes};
     VkDescriptorImageInfo dest{VK_NULL_HANDLE, target.view, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet writes[3]{};
     for (uint32_t i = 0; i < 3; ++i) {

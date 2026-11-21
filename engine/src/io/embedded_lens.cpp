@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <thread>
 
 namespace spk::io {
 namespace {
@@ -53,6 +54,20 @@ Centre oriented(std::array<double, 2> c, int flip, int w, int h) {
     const double x = c[0] * w - .5, y = c[1] * h - .5;
     return {x, y, 1 / std::hypot(w * std::max(c[0], 1-c[0]), h * std::max(c[1], 1-c[1]))};
 }
+// Independent source rows; both passes join before the next reads their output.
+template<class F>
+void lens_rows(int height, F row) {
+    const int limit = std::clamp(height / 64, 1, 12);
+    const int workers = std::clamp(int(std::thread::hardware_concurrency()), 1, limit);
+    auto run = [&](int part) {
+        const int begin = int(int64_t(height) * part / workers);
+        const int end = int(int64_t(height) * (part + 1) / workers);
+        for (int y = begin; y < end; ++y) row(y);
+    };
+    std::vector<std::jthread> threads;
+    for (int i = 1; i < workers; ++i) threads.emplace_back(run, i);
+    run(0);
+}
 } // namespace
 
 EmbeddedLens dng_lens(Bytes list) {
@@ -93,11 +108,13 @@ void apply_lens_profile(DecodedRaw& frame, const EmbeddedLens& lens) {
     const auto gain = oriented(lens.gain_center, frame.metadata.raw_flip, w, h);
     // Light falloff belongs to the sensor coordinates, before resampling.
     if (!lens.gain.empty()) {
-        for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
-            const auto factor = lookup(lens.gain, std::hypot(x-gain.x, y-gain.y) * gain.inv_radius);
-            auto* rgb = frame.rgb.data() + (size_t(y) * w + x) * 3;
-            for (int c = 0; c < 3; ++c) rgb[c] *= factor;
-        }
+        lens_rows(h, [&](int y) {
+            for (int x = 0; x < w; ++x) {
+                const auto factor = lookup(lens.gain, std::hypot(x-gain.x, y-gain.y) * gain.inv_radius);
+                auto* rgb = frame.rgb.data() + (size_t(y) * w + x) * 3;
+                for (int c = 0; c < 3; ++c) rgb[c] *= factor;
+            }
+        });
     }
     if (lens.scales[0].empty()) return;
     // Keep the corrected viewport inside the photograph on every plane.
@@ -105,21 +122,23 @@ void apply_lens_profile(DecodedRaw& frame, const EmbeddedLens& lens) {
     for (const auto& curve : lens.scales)
         if (!curve.empty()) zoom = std::max(zoom, double(*std::max_element(curve.begin(), curve.end())));
     std::vector<float> corrected(frame.rgb.size());
-    for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
-        const double dx = (x-warp.x)/zoom, dy = (y-warp.y)/zoom;
-        const double r = std::sqrt(dx*dx + dy*dy) * warp.inv_radius;
-        const float common = lookup(lens.scales[0], r);
-        for (int c = 0; c < 3; ++c) {
-            const float scale = c && !lens.scales[c].empty() ? lookup(lens.scales[c], r) : common;
-            const double sx = std::clamp(warp.x + dx*scale, 0., double(w-1));
-            const double sy = std::clamp(warp.y + dy*scale, 0., double(h-1));
-            const int x0 = int(sx), x1 = std::min(x0+1, w-1), y0 = int(sy), y1 = std::min(y0+1, h-1);
-            const auto pixel = [&](int xx, int yy) { return frame.rgb[(size_t(yy)*w + xx)*3 + c]; };
-            corrected[(size_t(y)*w + x)*3 + c] = std::lerp(
-                std::lerp(pixel(x0,y0), pixel(x1,y0), float(sx-x0)),
-                std::lerp(pixel(x0,y1), pixel(x1,y1), float(sx-x0)), float(sy-y0));
+    lens_rows(h, [&](int y) {
+        for (int x = 0; x < w; ++x) {
+            const double dx = (x-warp.x)/zoom, dy = (y-warp.y)/zoom;
+            const double r = std::sqrt(dx*dx + dy*dy) * warp.inv_radius;
+            const float common = lookup(lens.scales[0], r);
+            for (int c = 0; c < 3; ++c) {
+                const float scale = c && !lens.scales[c].empty() ? lookup(lens.scales[c], r) : common;
+                const double sx = std::clamp(warp.x + dx*scale, 0., double(w-1));
+                const double sy = std::clamp(warp.y + dy*scale, 0., double(h-1));
+                const int x0 = int(sx), x1 = std::min(x0+1, w-1), y0 = int(sy), y1 = std::min(y0+1, h-1);
+                const auto pixel = [&](int xx, int yy) { return frame.rgb[(size_t(yy)*w + xx)*3 + c]; };
+                corrected[(size_t(y)*w + x)*3 + c] = std::lerp(
+                    std::lerp(pixel(x0,y0), pixel(x1,y0), float(sx-x0)),
+                    std::lerp(pixel(x0,y1), pixel(x1,y1), float(sx-x0)), float(sy-y0));
+            }
         }
-    }
+    });
     frame.rgb.swap(corrected);
 }
 } // namespace spk::io

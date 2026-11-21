@@ -1,21 +1,12 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "display_half.glsl"
 layout(local_size_x=16, local_size_y=16) in;
 layout(set=0, binding=0, std430) readonly buffer Print { float rgb[]; };
 // A display-only caller binds one dummy word. The editor retains exact
 // 16-bit codes for export without reading the RGB plane a second time.
 layout(set=0, binding=1, std430) writeonly buffer Exact { uint words[]; };
 layout(set=0, binding=2, rgba16f) uniform writeonly image2D frame;
-// packHalf2x16 may round towards zero. Qt converts to nearest, ties to
-// even. Round positive unit floats in integers, including half subnormals.
-uint halfBits(float v) {
-    if (v == 0.0) return 0u;
-    uint bits = floatBitsToUint(v);
-    uint exponent = bits >> 23u;
-    uint shift = max(13u, 126u - min(126u, exponent));
-    uint significand = (bits & 0x7fffffu) | 0x800000u;
-    uint rounded = (significand + ((1u << (shift - 1u)) - 1u) + ((significand >> shift) & 1u)) >> shift;
-    return rounded + (exponent > 113u ? ((exponent - 113u) << 10u) : 0u);
-}
 void main() {
     ivec2 xy = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(frame);
@@ -28,9 +19,5 @@ void main() {
         words[2u*pixel] = c.r | (c.g << 16u);
         words[2u*pixel+1u] = c.b | 0xffff0000u;
     }
-    vec3 value = code * (1.0 / 65535.0);
-    // Match the existing RGBA16 -> Qt half-float conversion before filtering.
-    vec2 rg = unpackHalf2x16(halfBits(value.r) | (halfBits(value.g) << 16u));
-    vec2 ba = unpackHalf2x16(halfBits(value.b) | 0x3c000000u);
-    imageStore(frame, xy, vec4(rg, ba));
+    imageStore(frame, xy, displayHalf(code));
 }

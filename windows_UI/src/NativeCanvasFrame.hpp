@@ -12,6 +12,7 @@ struct NativeCanvasFrame {
     std::shared_ptr<spk::gpu::SharedDisplay> texture;
     QSize size, logicalSize;
     std::function<QImage()> hostImage;
+    std::function<std::shared_ptr<spk::gpu::SharedDisplay>()> restoreTexture;
 };
 // QML may retain a previous binding value until its next garbage collection.
 // The controller and the canvas own the publication only while it is current.

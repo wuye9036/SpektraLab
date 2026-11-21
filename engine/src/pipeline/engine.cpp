@@ -1241,6 +1241,13 @@ spk_status render_tier(spk_session* session, const char* tier_name, bool use_rep
         if (display->texture) {
             out->width = rgb.w;
             out->height = rgb.h;
+            if (exact && display->allowGeometry) {
+                display->project = [gpu, exact](const gpu::DisplayGeometry& geometry,
+                        const gpu::D3D11Publication& target, std::string& why) {
+                    return gpu::make_d3d11_display(*gpu, exact.get(), geometry.outputWidth(), geometry.outputHeight(),
+                                                   target, nullptr, why, &geometry);
+                };
+            }
             if (exact) display->readPixels = [gpu, exact, w=rgb.w, h=rgb.h](spk_result& pixels, std::string& why) {
                 pixels.texture = gpu->texture(exact.get(), w, h, w, why);
                 pixels.rgba16 = static_cast<const uint16_t*>(pixels.texture);
@@ -1300,6 +1307,7 @@ spk_status spk_render(spk_session* session, const char* tier, spk_result* out) {
 spk_status spk::gpu::render_d3d11(spk_session* session, const char* tier, bool reprint,
                                   D3D11Publication& display, spk_result& metadata, bool retainExact, bool fallback) {
     display.texture.reset();
+    display.project = {};
     display.readPixels = {};
     return render_tier(session, tier, reprint, &metadata, &display, retainExact, fallback);
 }

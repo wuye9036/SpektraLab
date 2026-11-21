@@ -84,6 +84,7 @@ void FrameCanvas::setNativeFrame(const QVariant& value) {
     auto next=value.value<NativeCanvasFrameRef>().lock();
     if(next==native_) return;
     native_=std::move(next);
+    resolvedTexture_.reset(); recoveredImage_={};
     ++revision_;
     sync();update();emit nativeDisplayChanged();emit viewChanged();
 }
@@ -229,7 +230,16 @@ QSGNode* FrameCanvas::updatePaintNode(QSGNode* old,UpdatePaintNodeData*) {
     paint.image=image_;paint.revision=revision_;
 #ifdef Q_OS_WIN
     if (native_) {
-        paint.nativeFrame=native_->texture;paint.nativeSize=native_->size;paint.hostImage=native_->hostImage;
+        if (!native_->texture && native_->restoreTexture && !resolvedTexture_ && recoveredImage_.isNull()) {
+            resolvedTexture_=native_->restoreTexture();
+            if (!resolvedTexture_ && native_->hostImage) {
+                try { recoveredImage_=native_->hostImage(); }
+                catch (const std::exception& e) { qWarning("FrameCanvas: %s", e.what()); recoveredImage_=image_; }
+            }
+        }
+        paint.nativeFrame=native_->texture ? native_->texture : resolvedTexture_;
+        paint.nativeSize=native_->size; paint.hostImage=native_->hostImage;
+        if (!recoveredImage_.isNull()) paint.image=recoveredImage_;
     }
 #endif
     paint.lut=colour.lut;paint.proof=colour.proof;paint.warning=colour.warning;

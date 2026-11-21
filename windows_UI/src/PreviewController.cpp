@@ -193,15 +193,38 @@ PreviewController::Publication PreviewController::publish(const ImageFactory& fa
 #ifdef Q_OS_WIN
     if (frame->display) {
         const auto native=std::static_pointer_cast<EditorDisplay>(frame->display);
-        p.nativePrint=std::make_shared<NativeCanvasFrame>(NativeCanvasFrame{native->texture,
-            QSize(int(frame->width()),int(frame->height())),QSize(int(frame->logicalWidth()),int(frame->logicalHeight())),
-            [frame]{return desktop::display::frameImage(frame);}});
-        p.navigator=native->navigator;
-        p.full=p.navigator;
-        p.full.setDevicePixelRatio(double(p.full.width())/frame->logicalWidth());
-        p.visible=visibleImage(frame,p.full,geometry);
-        p.histogram=p.visible.cacheKey()==p.full.cacheKey()?native->histogram:desktop::display::histogram(p.visible);
-        if (p.visible.cacheKey()!=p.full.cacheKey()) p.navigator=desktop::display::navigatorImage(p.visible,previewImageEdge());
+        const QSize source(int(frame->width()),int(frame->height()));
+        const QSize logical(int(frame->logicalWidth()),int(frame->logicalHeight()));
+        auto texture=std::move(native->texture);
+        auto original=std::make_shared<NativeCanvasFrame>(NativeCanvasFrame{{},source,logical,[frame] {
+            auto image=desktop::display::frameImage(frame);
+            image.setDevicePixelRatio(double(frame->width())/frame->logicalWidth());
+            return image;
+        }});
+        if (native->project) {
+            // Reuse the original surface while visible. Once a projected print
+            // replaces it, the crop editor can reconstruct it from the exact codes.
+            original->restoreTexture=[frame,source,weak=std::weak_ptr(texture)] {
+                if (auto existing=weak.lock()) return existing;
+                spk::gpu::D3D11Publication target;
+                target.producer=desktop::postdev::analysisDevice();
+                const auto w=uint32_t(source.width()), h=uint32_t(source.height());
+                std::string why;
+                return frame->display->project({w,0,0,w,h,0,0,0},target,why);
+            };
+        } else original->texture=texture;
+        p.full=native->navigator;
+        p.full.setDevicePixelRatio(double(source.width())/logical.width());
+        p.nativePrint=original;
+        if (native->project && !frame->cut && geometry!=output::Geometry{}) texture.reset();
+        auto shown=geometryPicture(frame,p.full,geometry,original);
+        if (shown.native==original && texture && !original->texture) {
+            auto visible=std::make_shared<NativeCanvasFrame>(*original);
+            visible->texture=std::move(texture);
+            shown.native=std::move(visible);
+        }
+        p.visible=std::move(shown.image); p.navigator=std::move(shown.navigator);
+        p.histogram=std::move(shown.histogram); p.nativeVisible=std::move(shown.native);
         p.whole=desktop::display::thumbnailImage(native->navigator);
         if(frame->source_preview)p.source=sourceImage(frame);
         p.uncropped_histogram=p.source.isNull()?native->histogram:desktop::display::histogram(p.source);
@@ -287,7 +310,9 @@ PreviewController::PreviewController(std::filesystem::path resources,QObject* pa
     if (d3d11Canvas) {
         options.beginDisplay=[edge=previewImageEdge()](const desktop::OutputEncoding& encoding)->std::shared_ptr<spk::gpu::D3D11Publication> {
             auto frame=std::make_shared<EditorDisplay>();
+            frame->allowGeometry=true;
             frame->producer=desktop::postdev::analysisDevice();
+            frame->producerMutex=&desktop::postdev::analysisMutex();
             const auto space=desktop::display::colorSpace(encoding);
             frame->analyze=[out=frame.get(),space,edge](ID3D11Texture2D* texture) {
                 desktop::postdev::analyzeDisplay(texture,space,{edge,edge},desktop::display::kHistogramSamples,out->navigator,out->guide,out->histogram);
@@ -305,7 +330,7 @@ PreviewController::PreviewController(std::filesystem::path resources,QObject* pa
 }
 QImage PreviewController::previewImage() const {
 #ifdef Q_OS_WIN
-    if (frame_ && frame_->display && image_.cacheKey()==full_image_.cacheKey()) return uncroppedImageForPrint();
+    if (native_visible_ && native_visible_->hostImage) return native_visible_->hostImage();
 #endif
     return image_;
 }
@@ -324,7 +349,7 @@ QVariant PreviewController::nativePrint() const {
     return native_print_ ? QVariant::fromValue(NativeCanvasFrameRef(native_print_)) : QVariant{};
 }
 QVariant PreviewController::nativePreview() const {
-    return image_.cacheKey()==full_image_.cacheKey() ? nativePrint() : QVariant{};
+    return native_visible_ ? QVariant::fromValue(NativeCanvasFrameRef(native_visible_)) : QVariant{};
 }
 QVariant PreviewController::nativeWhole() const {
     return frame_ && (!frame_->cut || source_image_.isNull()) ? nativePrint() : QVariant{};
@@ -444,25 +469,62 @@ void PreviewController::runVisible() {
         },Qt::QueuedConnection);
     });
 }
+PreviewController::Visible PreviewController::geometryPicture(const desktop::FramePtr& frame,const QImage& full,
+        const output::Geometry& geometry,const std::shared_ptr<const NativeCanvasFrame>& whole) {
+    Visible v;
+#ifdef Q_OS_WIN
+    if (whole && frame->display) {
+        const auto native=std::static_pointer_cast<EditorDisplay>(frame->display);
+        if (frame->cut || geometry==output::Geometry{}) {
+            v.image=full; v.navigator=native->navigator; v.histogram=native->histogram; v.native=whole;
+            return v;
+        }
+        const auto rect=output::cropPixels(whole->size,geometry.crop);
+        spk::gpu::DisplayGeometry g{uint32_t(whole->size.width()),uint32_t(rect.x()),uint32_t(rect.y()),
+            uint32_t(rect.width()),uint32_t(rect.height()),uint32_t(geometry.quarterTurns),
+            uint32_t(geometry.flipHorizontal) | (uint32_t(geometry.flipVertical)<<1),geometry.straightenDegrees};
+        spk::gpu::D3D11Publication target;
+        target.producer=native->producer;
+        target.producerMutex=native->producerMutex;
+        target.analyze=[&](ID3D11Texture2D* texture) {
+            QImage unused;
+            desktop::postdev::analyzeDisplay(texture,full.colorSpace(),{previewImageEdge(),previewImageEdge()},
+                desktop::display::kHistogramSamples,v.navigator,unused,v.histogram,false);
+        };
+        std::string why;
+        if (auto texture=native->project ? native->project(g,target,why) : nullptr) {
+            QSize logical=output::cropPixels(whole->logicalSize,geometry.crop).size();
+            if (geometry.quarterTurns%2) logical.transpose();
+            v.native=std::make_shared<NativeCanvasFrame>(NativeCanvasFrame{std::move(texture),
+                QSize(int(g.outputWidth()),int(g.outputHeight())),logical,[frame,geometry] {
+                    auto image=output::displayFrame(frame,geometry);
+                    image.setDevicePixelRatio(double(frame->width())/frame->logicalWidth());
+                    return image;
+                }});
+            v.image=v.navigator;
+            v.image.setDevicePixelRatio(double(v.navigator.width())/logical.width());
+            return v;
+        }
+        qWarning("GPU display geometry: %s",why.c_str());
+    }
+#endif
+    v.image=visibleImage(frame,full,geometry);
+    v.navigator=desktop::display::navigatorImage(v.image,previewImageEdge());
+    v.histogram=desktop::display::histogram(v.image);
+    return v;
+}
 void PreviewController::requestGeometryPicture() {
     if(!frame_)return;
     // A cut frame already carries the crop: its picture is the frame whatever
     // the geometry (visibleImage), and the render that follows replaces it.
     if(frame_->cut){retireVisible();return;}
     const auto frame=frame_;const auto full=full_image_;const auto geometry=geometry_;
-    requestVisible([this,frame,full,geometry]{
-        Visible v;
-        v.image=visibleImage(frame,full,geometry);
-        v.navigator=desktop::display::navigatorImage(v.image,previewImageEdge());
-#ifdef Q_OS_WIN
-        if (frame->display && v.image.cacheKey()==full.cacheKey())
-            v.histogram=std::static_pointer_cast<EditorDisplay>(frame->display)->histogram;
-        else
-#endif
-            v.histogram=desktop::display::histogram(v.image);
-        return v;
+    const auto whole=native_print_;
+    requestVisible([this,frame,full,geometry,whole]{
+        return geometryPicture(frame,full,geometry,whole);
     },[this](Visible v){
         if(!v.error.isEmpty()){failed_=true;status_=v.error;emit stateChanged();return;}
+        native_visible_=std::move(v.native);
         image_=std::move(v.image);navigator_=std::move(v.navigator);histogram_=std::move(v.histogram);
         updateThumbnail();
         emit frameChanged();
@@ -565,6 +627,7 @@ void PreviewController::accept(Reply reply) {
             // A picture cut with an old geometry is never shown: the last
             // picture stays until today's lands (requestGeometryPicture below).
             if(!repicture) {
+                native_visible_=std::move(published.nativeVisible);
                 image_=std::move(published.visible);navigator_=std::move(published.navigator);
                 histogram_=std::move(published.histogram);
             }

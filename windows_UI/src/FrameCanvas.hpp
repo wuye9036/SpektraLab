@@ -162,6 +162,8 @@ private:
     QMetaObject::Connection followChanged_;
     QImage image_, toneSource_, preparedGuide_;
     std::shared_ptr<const NativeCanvasFrame> native_;
+    std::shared_ptr<spk::gpu::SharedDisplay> resolvedTexture_;
+    QImage recoveredImage_;
 
     quint64 revision_=0;
     ProofTransformPtr proof_;

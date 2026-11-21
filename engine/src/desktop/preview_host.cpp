@@ -1167,7 +1167,7 @@ const spk_result& Frame::pixels() const {
         std::string error;
         if (!display->readPixels(result_, error)) throw std::runtime_error(error);
         display->readPixels = {}; // the exact host copy now owns these codes
-        display->engineOwner.reset();
+        if (!display->project) display->engineOwner.reset();
     }
 #endif
     return result_;
@@ -1212,14 +1212,15 @@ struct PreviewHost::Impl {
     spk_status renderFrame(Frame& frame, spk_session* live, const char* tier, bool reprint,
                            const OutputEncoding& encoding, const EngineCut& geometry, bool cut, FrameUse use) {
 #ifdef _WIN32
-        if (use==FrameUse::display && !options.bgra8_display && options.beginDisplay && (cut || geometry.identity())) {
+        if (use==FrameUse::display && !options.bgra8_display && options.beginDisplay) {
             frame.display = options.beginDisplay(encoding);
-            if (frame.display) {
+            if (frame.display && (cut || geometry.identity() || frame.display->allowGeometry)) {
                 auto status = gpu::render_d3d11(live, tier, reprint, *frame.display, frame.result_, true, true);
                 if (frame.display->texture) frame.display->engineOwner = engine;
                 else frame.display.reset();
                 return status;
             }
+            frame.display.reset();
         }
 #endif
         return reprint ? spk_reprint(live, tier, &frame.result_) : spk_render(live, tier, &frame.result_);
